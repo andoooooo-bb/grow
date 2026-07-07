@@ -6,7 +6,7 @@
 
 import { useBoardStore } from '../store/board.ts';
 import type { SubtaskProposalEvent } from '../types/api.ts';
-import type { Artifact, ChatMessage, Comment, Task } from '../types/domain.ts';
+import type { Artifact, ChatMessage, Comment, Rule, Task } from '../types/domain.ts';
 
 export const EVENTS_URL = '/api/events';
 
@@ -16,6 +16,8 @@ export const COMMENT_CREATED = 'comment.created';
 export const ARTIFACT_CREATED = 'artifact.created'; // #10（backend/app/repo/artifacts.py）
 export const CHAT_MESSAGE_CREATED = 'chat.message.created'; // #11/#12（壁打ち）
 export const SUBTASK_PROPOSAL = 'subtask.proposal'; // #11/#12（分解候補。サーバ非永続）
+export const RULE_CREATED = 'rule.created'; // #13/#14（蒸留候補の採用）
+export const RULE_UPDATED = 'rule.updated'; // #13/#14（昇格・applied++ の同期）
 
 interface SseEnvelope<T> {
   type: string;
@@ -29,6 +31,8 @@ interface SseEnvelope<T> {
  * - artifact.created → applyArtifactCreated（成果物の新版を version 昇順で追記。id で重複排除）
  * - chat.message.created → applyChatMessageCreated（開始済みの壁打ちへ追記。id で重複排除）
  * - subtask.proposal → applySubtaskProposal（分解候補を proposal[taskId] へセット）
+ * - rule.created / rule.updated → applyRuleCreated / applyRuleUpdated（id で upsert。
+ *   isNew はクライアント表示状態なのでローカル既存値を保持する — #14）
  * 切断時の再接続は EventSource が自動で行う。戻り値は切断用のクリーンアップ。
  */
 export function connectEvents(): () => void {
@@ -43,6 +47,8 @@ export function connectEvents(): () => void {
     applyArtifactCreated,
     applyChatMessageCreated,
     applySubtaskProposal,
+    applyRuleCreated,
+    applyRuleUpdated,
   } = useBoardStore.getState();
 
   source.addEventListener(TASK_UPDATED, (e: MessageEvent) => {
@@ -66,6 +72,14 @@ export function connectEvents(): () => void {
       e.data as string,
     ) as SseEnvelope<SubtaskProposalEvent>;
     applySubtaskProposal(payload);
+  });
+  source.addEventListener(RULE_CREATED, (e: MessageEvent) => {
+    const { payload } = JSON.parse(e.data as string) as SseEnvelope<Rule>;
+    applyRuleCreated(payload);
+  });
+  source.addEventListener(RULE_UPDATED, (e: MessageEvent) => {
+    const { payload } = JSON.parse(e.data as string) as SseEnvelope<Rule>;
+    applyRuleUpdated(payload);
   });
 
   return () => source.close();

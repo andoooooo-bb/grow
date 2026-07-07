@@ -1,7 +1,7 @@
-// カード詳細ドロワー（§3.3, #7/#10/#12）: 選択時のみ表示。
-// detail モード（ヘッダ・アクションバー・適用ルール(b)・成果物(c-2)・サブタスク(d)・
-// アクティビティスレッド・コンポーザ）と chat モード（§3.3.3 壁打ち）を panelMode で切替。
-// 学習(c)セクションは後続 Issue（#13）。
+// カード詳細ドロワー（§3.3, #7/#10/#12/#14）: 選択時のみ表示。
+// detail モード（ヘッダ・アクションバー・適用ルール(b)・学習(c)・成果物(c-2)・
+// サブタスク(d)・アクティビティスレッド・コンポーザ）と chat モード（§3.3.3 壁打ち）を
+// panelMode で切替。
 
 import { useEffect } from 'react';
 import { useBoardStore } from '../../store/board.ts';
@@ -12,6 +12,7 @@ import { ArtifactSection } from './ArtifactSection';
 import { ChatMode } from './ChatMode';
 import { Composer } from './Composer';
 import { DrawerHeader } from './DrawerHeader';
+import { LearnSection } from './LearnSection';
 import { SubtaskSection } from './SubtaskSection';
 import './Drawer.css';
 
@@ -65,7 +66,9 @@ export function Drawer() {
           />
           {/* (b) 適用ルール（§3.3.2b, #10）: retrieval 0件時はコンポーネント側で非表示 */}
           <AppliedRules task={task} />
-          {/* (c-2) 成果物（§3.3.2 c-2, #10）: 学習(c)実装後も AppliedRules との間に置く */}
+          {/* (c) 学習（§3.3.2c, #14）: 完了系（you_review/reviewing/done）以外は非表示 */}
+          <LearnSection task={task} />
+          {/* (c-2) 成果物（§3.3.2 c-2, #10）: 学習(c)と サブタスク(d) の間に置く */}
           <ArtifactSection task={task} canAssignAi={canAssignAi} />
           {/* (d) サブタスク（§3.3.2d, #12）: childIds が無ければコンポーネント側で非表示 */}
           <SubtaskSection task={task} />

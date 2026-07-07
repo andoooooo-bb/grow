@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react';
 import { Board } from './components/board/Board';
 import { TopBar } from './components/board/TopBar';
 import { Drawer } from './components/drawer/Drawer';
+import { KnowledgeOverlay } from './components/knowledge/KnowledgeOverlay';
 import { getBoard } from './lib/api.ts';
 import { connectEvents } from './lib/sse.ts';
 import { useBoardStore } from './store/board.ts';
@@ -41,6 +42,8 @@ function BoardScreen() {
           </>
         )}
       </div>
+      {/* ナレッジ・オーバーレイ（§3.4, #14）: showKnowledge はコンポーネント側で判定 */}
+      <KnowledgeOverlay />
     </div>
   );
 }

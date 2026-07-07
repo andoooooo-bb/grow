@@ -145,4 +145,14 @@ export interface RuleProposalDto {
   scope: RuleScope;
   tags: string[];
   confidence: Confidence;
+  source?: string; // 抽出根拠（§7.5。BE は返すが表示は任意なので optional）
+}
+
+// ---- 手動蒸留（#13/#14 §6.4a / §5.3 adoptLearn・dismissLearn） ----
+// POST /tasks/:id/learn/adopt・/learn/dismiss の body（候補1件の内容）
+export interface LearnDecisionRequest {
+  text: string;
+  scope: RuleScope;
+  tags: string[];
+  confidence: Confidence;
 }

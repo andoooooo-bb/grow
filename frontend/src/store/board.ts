@@ -4,14 +4,18 @@
 
 import { create } from 'zustand';
 import {
+  adoptLearn as adoptLearnRequest,
   assignAi as assignAiRequest,
   confirmBreakdown as confirmBreakdownRequest,
   createArtifact,
   createComment,
   createTask,
+  dismissLearn as dismissLearnRequest,
   getArtifacts,
   getComments,
+  getLearnProposals,
   patchTask,
+  promoteRule as promoteRuleRequest,
   sendChatMessage,
   startChat as startChatRequest,
 } from '../lib/api.ts';
@@ -59,6 +63,7 @@ export interface BoardState {
   chatDrafts: Record<string, string>; // 壁打ちコンポーザ入力（detail のコンポーザとは別持ち, #12）
   assigning: Record<string, boolean>; // taskId -> assign-ai 送信中（ボタン無効化, #10）
   confirming: Record<string, boolean>; // taskId -> breakdown/confirm 送信中（ボタン無効化, #12）
+  learning: Record<string, boolean>; // taskId -> 「✧ 学ぶ」実行中（ボタン無効化, #14）
 }
 
 export interface BoardActions {
@@ -136,6 +141,26 @@ export interface BoardActions {
    */
   confirmBreakdown: (taskId: string) => Promise<void>;
 
+  // ---- 学習（蒸留）・ナレッジ（#14 / §1.7 / §1.8 / §5.3） ----
+  /**
+   * §5.3 learnFrom: 「✧ 学ぶ」で GET /tasks/:id/learn → 候補を learn[taskId] へセット。
+   * 実行中は learning フラグでボタンを無効化。409/失敗は boardError（§5.4）。
+   */
+  learnFrom: (taskId: string) => Promise<void>;
+  /**
+   * §5.3 adoptLearn: 候補を POST /learn/adopt → 応答 Rule（K-xx）を rules へ
+   * isNew=true（NEW バッジ, クライアント表示状態）で upsert → 候補から除去。
+   * カードへのAIコメントは SSE（comment.created）が反映する。失敗時は候補を残す。
+   */
+  adoptLearn: (taskId: string, tempId: string) => Promise<void>;
+  /** §5.3 dismissLearn: 候補を POST /learn/dismiss（feedback 記録のみ）→ 候補から除去 */
+  dismissLearn: (taskId: string, tempId: string) => Promise<void>;
+  /**
+   * §1.8 promoteRule: POST /rules/:id/promote → 応答（scope=team）を isNew=true で
+   * upsert（NEW 再表示）。ナレッジ・オーバーレイの「チームのルール」へ移る。
+   */
+  promoteRule: (ruleId: string) => Promise<void>;
+
   // ---- SSE 適用（#7 / #10 / #12 / src/lib/sse.ts から呼ばれる） ----
   /** task.updated: カードを差し替え、レーン移動も反映（全レーンから除去→laneKey へ挿入） */
   applyTaskUpdated: (task: Task) => void;
@@ -150,6 +175,13 @@ export interface BoardActions {
   applyChatMessageCreated: (message: ChatMessage) => void;
   /** subtask.proposal: 分解候補を proposal[taskId] へセットする（#12。サーバ非永続） */
   applySubtaskProposal: (event: SubtaskProposalEvent) => void;
+  /**
+   * rule.created: rules へ id で upsert（#14。自分の adopt 応答との重複は upsert で解決）。
+   * isNew はクライアント表示状態なので、既存のローカル値を保持する（SSE で NEW が消えない）。
+   */
+  applyRuleCreated: (rule: Rule) => void;
+  /** rule.updated: 昇格・applied++ の同期（#14）。upsert 方針は applyRuleCreated と同じ */
+  applyRuleUpdated: (rule: Rule) => void;
 }
 
 export type BoardStore = BoardState & BoardActions;
@@ -175,6 +207,7 @@ export function createInitialBoardState(): BoardState {
     chatDrafts: {},
     assigning: {},
     confirming: {},
+    learning: {},
   };
 }
 
@@ -200,6 +233,18 @@ export const NEW_CARD_TITLE = '新しいタスク';
 /** addCard の AI 初期コメント（§5.3） */
 export const ADD_CARD_AI_PROMPT =
   'タイトルと、やりたいことを教えてください。大きければ壁打ちで分解しましょう。';
+
+/**
+ * rules へ id で upsert する（#14）。isNew はクライアント表示状態（サーバは返さない）
+ * なので、明示指定（adopt/promote 直後の true）が無ければローカル既存値を保持する —
+ * SSE の rule.created/rule.updated で NEW バッジが消えないようにする（§5.3）。
+ */
+function upsertRule(rules: Rule[], rule: Rule): Rule[] {
+  const existing = rules.find((r) => r.id === rule.id);
+  if (existing === undefined) return [...rules, rule];
+  const next: Rule = { ...rule, isNew: rule.isNew ?? existing.isNew };
+  return rules.map((r) => (r.id === rule.id ? next : r));
+}
 
 /** cards[taskId].commentCount を delta 分ずらす（カードが無ければ何もしない） */
 function shiftCommentCount(
@@ -523,6 +568,85 @@ export const useBoardStore = create<BoardStore>()((set, get) => ({
     }
   },
 
+  // ---- 学習（蒸留）・ナレッジ（#14 / §1.7 / §1.8 / §5.3） ----
+  learnFrom: async (taskId) => {
+    const s = get();
+    if (s.learning[taskId] === true) return; // 二重実行防止（実行中はボタンも無効）
+    if (s.cards[taskId] === undefined) return;
+    set((st) => ({
+      learning: { ...st.learning, [taskId]: true },
+      boardError: null,
+    }));
+    try {
+      // 候補はサーバ非永続（§6.4a）: 受け取った内容を adopt/dismiss で送り返す
+      const proposals = await getLearnProposals(taskId);
+      set((st) => ({ learn: { ...st.learn, [taskId]: proposals } }));
+    } catch {
+      // 完了系以外（409）・通信失敗（§5.4 簡易エラー）
+      set({ boardError: 'ルール候補を生成できませんでした' });
+    } finally {
+      set((st) => ({ learning: { ...st.learning, [taskId]: false } }));
+    }
+  },
+  adoptLearn: async (taskId, tempId) => {
+    const proposal = (get().learn[taskId] ?? []).find((p) => p.tempId === tempId);
+    if (proposal === undefined) return;
+    set({ boardError: null });
+    try {
+      const created = await adoptLearnRequest(taskId, {
+        text: proposal.text,
+        scope: proposal.scope,
+        tags: proposal.tags,
+        confidence: proposal.confidence,
+      });
+      set((st) => ({
+        // NEW バッジはクライアント状態: 採用直後に isNew を立てる（§5.3 / プロト準拠）。
+        // SSE の rule.created が先着していても id upsert で自然に一本化される。
+        rules: upsertRule(st.rules, { ...created, isNew: true }),
+        learn: {
+          ...st.learn,
+          [taskId]: (st.learn[taskId] ?? []).filter((p) => p.tempId !== tempId),
+        },
+      }));
+      // 採用コメントとカードの commentCount は SSE（comment.created / task.updated）が反映する
+    } catch {
+      // 失敗時は候補行を残す（§5.4）
+      set({ boardError: 'ナレッジへの追加に失敗しました' });
+    }
+  },
+  dismissLearn: async (taskId, tempId) => {
+    const proposal = (get().learn[taskId] ?? []).find((p) => p.tempId === tempId);
+    if (proposal === undefined) return;
+    set({ boardError: null });
+    try {
+      // 却下も内容を送り返す（rule_feedback に記録され将来の蒸留のお手本になる §6.4）
+      await dismissLearnRequest(taskId, {
+        text: proposal.text,
+        scope: proposal.scope,
+        tags: proposal.tags,
+        confidence: proposal.confidence,
+      });
+      set((st) => ({
+        learn: {
+          ...st.learn,
+          [taskId]: (st.learn[taskId] ?? []).filter((p) => p.tempId !== tempId),
+        },
+      }));
+    } catch {
+      set({ boardError: '候補の却下に失敗しました' });
+    }
+  },
+  promoteRule: async (ruleId) => {
+    set({ boardError: null });
+    try {
+      const promoted = await promoteRuleRequest(ruleId);
+      // NEW 再表示（§5.3 promoteRule: isNew=true）。冪等時（既に team）も応答で確定する
+      set((st) => ({ rules: upsertRule(st.rules, { ...promoted, isNew: true }) }));
+    } catch {
+      set({ boardError: 'チームへの昇格に失敗しました' });
+    }
+  },
+
   // ---- SSE 適用（#7 / #10 / #12） ----
   applyTaskUpdated: (task) =>
     set((s) => {
@@ -588,6 +712,8 @@ export const useBoardStore = create<BoardStore>()((set, get) => ({
     set((s) => ({
       proposal: { ...s.proposal, [event.taskId]: event.subtasks },
     })),
+  applyRuleCreated: (rule) => set((s) => ({ rules: upsertRule(s.rules, rule) })),
+  applyRuleUpdated: (rule) => set((s) => ({ rules: upsertRule(s.rules, rule) })),
 }));
 
 // ---- 派生値（§5.1: render のたび計算, 保存しない） ----

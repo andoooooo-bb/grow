@@ -1,12 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createInitialBoardState, useBoardStore } from '../store/board.ts';
 import { boardFixture } from '../test/boardFixture.ts';
-import type { Artifact, ChatMessage, Comment, Task } from '../types/domain.ts';
+import type {
+  Artifact,
+  ChatMessage,
+  Comment,
+  Rule,
+  Task,
+} from '../types/domain.ts';
 import {
   ARTIFACT_CREATED,
   CHAT_MESSAGE_CREATED,
   COMMENT_CREATED,
   EVENTS_URL,
+  RULE_CREATED,
+  RULE_UPDATED,
   SUBTASK_PROPOSAL,
   TASK_UPDATED,
   connectEvents,
@@ -199,6 +207,64 @@ describe('connectEvents（§5.4 / #7）', () => {
     const list = useBoardStore.getState().chat['T-130'];
     expect(list).toHaveLength(1);
     expect(list[0].id).toBe('m-2');
+  });
+
+  it('rule.created で rules へ追記する（#14。id upsert なので再送は重複しない）', () => {
+    connectEvents();
+    const created: Rule = {
+      id: 'K-06',
+      workspaceId: 'ws-1',
+      scope: 'personal',
+      ownerUserId: 'user-yk',
+      text: '確定申告サマリーは控除候補を別セクションで先に提示する',
+      tags: ['経理'],
+      source: 'T-091 から学習',
+      confidence: 'med',
+      applied: 0,
+      createdAt: AT,
+      updatedAt: AT,
+    };
+
+    lastSource().emit(RULE_CREATED, created);
+    expect(useBoardStore.getState().rules).toHaveLength(6);
+    expect(useBoardStore.getState().rules.at(-1)?.id).toBe('K-06');
+
+    // 自分の adopt 応答が先に upsert 済みでも id で一本化される
+    lastSource().emit(RULE_CREATED, created);
+    expect(useBoardStore.getState().rules).toHaveLength(6);
+  });
+
+  it('rule.created / rule.updated はローカルの isNew（NEW バッジ）を保持する（#14）', () => {
+    connectEvents();
+    // adopt 直後: クライアントが isNew=true を立てている（サーバは isNew を返さない）
+    useBoardStore.setState((s) => ({
+      rules: s.rules.map((r) => (r.id === 'K-01' ? { ...r, isNew: true } : r)),
+    }));
+    const server = useBoardStore.getState().rules.find((r) => r.id === 'K-01');
+    if (!server) throw new Error('fixture にルールが無い: K-01');
+    const { isNew: _isNew, ...withoutIsNew } = server;
+
+    lastSource().emit(RULE_CREATED, withoutIsNew);
+    expect(
+      useBoardStore.getState().rules.find((r) => r.id === 'K-01')?.isNew,
+    ).toBe(true);
+
+    // assign-ai 適用後の rule.updated（applied++）でも NEW は消えない
+    lastSource().emit(RULE_UPDATED, { ...withoutIsNew, applied: 7 });
+    const updated = useBoardStore.getState().rules.find((r) => r.id === 'K-01');
+    expect(updated?.applied).toBe(7);
+    expect(updated?.isNew).toBe(true);
+  });
+
+  it('rule.updated で昇格（scope=team）を同期する（#14 §1.8）', () => {
+    connectEvents();
+    const target = useBoardStore.getState().rules.find((r) => r.id === 'K-03');
+    if (!target) throw new Error('fixture にルールが無い: K-03');
+
+    lastSource().emit(RULE_UPDATED, { ...target, scope: 'team' });
+    const s = useBoardStore.getState();
+    expect(s.rules.find((r) => r.id === 'K-03')?.scope).toBe('team');
+    expect(s.rules).toHaveLength(5); // 差し替えのみで増えない
   });
 
   it('subtask.proposal で分解候補を proposal[taskId] へセットする（#12）', () => {

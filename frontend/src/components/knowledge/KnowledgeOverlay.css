@@ -1,0 +1,228 @@
+/* ナレッジ・オーバーレイ（§3.4 #14）: fixed 全面, 遮蔽 rgba(20,24,40,.42), 上寄せ中央, msgin */
+.knowledge {
+  position: fixed;
+  inset: 0;
+  background: var(--color-overlay-scrim);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 56px 20px;
+  z-index: 50;
+  animation: var(--anim-msgin);
+}
+
+/* パネル: 幅720px（max100%, max-height84vh）, 白, radius14px, 影, 縦flex */
+.knowledge__panel {
+  width: var(--overlay-width);
+  max-width: 100%;
+  max-height: 84vh;
+  background: var(--color-surface);
+  border-radius: var(--radius-overlay);
+  box-shadow: var(--shadow-overlay);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ヘッダ（padding 18px 22px, 下線 #eef0f3） */
+.knowledge__header {
+  flex: none;
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--color-divider-2);
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+/* 「ナレッジ — 学習した働き方」16px/700 #222831 */
+.knowledge__title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--color-text-strongest);
+}
+
+/* 説明文 12px #8a909a line-height1.65 */
+.knowledge__description {
+  font-size: 12px;
+  color: var(--color-text-weak);
+  margin-top: 5px;
+  line-height: 1.65;
+}
+
+/* 閉じる✕（28×28, 背景 #f1f3f5） */
+.knowledge__close {
+  border: none;
+  background: var(--color-chip-bg-2);
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-button);
+  color: var(--color-text-secondary);
+  font-size: 15px;
+  cursor: pointer;
+  flex: none;
+}
+
+/* ボディ（scroll, padding 18px 22px, gap22px）: 2セクション */
+.knowledge__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+/* セクション見出し: アイコン(18×18)＋タイトル12.5px/700＋件数mono */
+.knowledge__section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.knowledge__section-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-badge);
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* あなたのルール = "YK"（アンバー） */
+.knowledge__section-icon--you {
+  background: var(--color-amber-bg);
+  color: var(--color-amber-text);
+  font-size: 8px;
+}
+
+/* チームのルール = "◎"（ティール） */
+.knowledge__section-icon--team {
+  background: var(--color-teal-bg);
+  color: var(--color-teal-dark);
+  font-size: 10px;
+}
+
+.knowledge__section-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--color-text-body);
+}
+
+.knowledge__section-count {
+  font-size: 11px;
+  color: var(--color-text-weakest);
+  font-family: var(--font-mono);
+}
+
+.knowledge__rules {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+/* ルールカード（枠 #eceef2, radius10px, padding 12px 13px, 縦flex gap8px） */
+.knowledge__rule {
+  border: 1px solid var(--color-divider-list);
+  border-radius: var(--radius-rule-card);
+  padding: 12px 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* チームのルールカード（背景 #f7fcfb, 枠 #e0efec） */
+.knowledge__rule--team {
+  background: var(--color-teal-bg-soft);
+  border-color: var(--color-teal-border);
+}
+
+/* 上段: 確度ドット＋ルール文＋NEW */
+.knowledge__rule-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+/* 確度ドット7px（high緑/med琥珀/low灰） */
+.knowledge__conf {
+  flex: none;
+  margin-top: 4px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.knowledge__conf--high {
+  background: var(--color-conf-high);
+}
+
+.knowledge__conf--med {
+  background: var(--color-conf-med);
+}
+
+.knowledge__conf--low {
+  background: var(--color-conf-low);
+}
+
+/* ルール文 13px #2a2f38 line-height1.55 */
+.knowledge__rule-text {
+  flex: 1;
+  font-size: 13px;
+  color: var(--color-text-strong);
+  line-height: 1.55;
+}
+
+/* NEW バッジ（#0b7a72 / #e1f3f1。採用/昇格直後のクライアント表示状態） */
+.knowledge__new {
+  flex: none;
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--color-teal-dark);
+  background: var(--color-teal-bg);
+  border-radius: var(--radius-badge);
+  padding: 2px 6px;
+}
+
+/* 下段（padding-left 16px, wrap）: 出典・適用回数(mono)・右端に昇格ボタン */
+.knowledge__rule-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-left: 16px;
+  flex-wrap: wrap;
+}
+
+.knowledge__source {
+  font-size: 10.5px;
+  color: var(--color-text-weakest);
+}
+
+.knowledge__applied {
+  font-size: 10.5px;
+  color: var(--color-text-weakest);
+  font-family: var(--font-mono);
+}
+
+/* 「チームへ昇格 ↑」（#5d4eb0 / #f1edfb / 枠 #e3dbf6, 10.5px/600） */
+.knowledge__promote {
+  margin-left: auto;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--color-purple);
+  background: var(--color-purple-bg);
+  border: 1px solid var(--color-purple-border);
+  border-radius: var(--radius-badge-lg);
+  padding: 4px 9px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+/* 空状態（§5.5）: 「まだありません。タスクを完了して『✧ 学ぶ』で追加できます」 */
+.knowledge__empty {
+  font-size: 11.5px;
+  color: var(--color-text-weakest);
+  line-height: 1.5;
+}

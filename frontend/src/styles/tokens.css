@@ -85,6 +85,7 @@
   --color-applied-rules-bg: #fbfbfe; /* 適用ルールセクション背景（§3.3.2b — #10） */
   --color-chat-band-border: #e7e0f7; /* chat モードヘッダ帯の下線（§3.3.3 — #12） */
   --color-chat-bubble-bg: #f6f4fc; /* chat モード本文バブル背景（§3.3.3 — #12） */
+  --color-dismiss: #b6bcc6; /* 学習候補の✕却下（§3.3.2c — #14） */
 
   /* ---- §4.2 タイポグラフィ ---- */
   --font-ui: 'IBM Plex Sans JP', sans-serif;

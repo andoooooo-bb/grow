@@ -9,10 +9,12 @@ import type {
   BreakdownConfirmResponse,
   ChatSendRequest,
   CommentCreate,
+  LearnDecisionRequest,
+  RuleProposalDto,
   TaskCreate,
   TaskPatch,
 } from '../types/api.ts';
-import type { Artifact, ChatMessage, Comment, Task } from '../types/domain.ts';
+import type { Artifact, ChatMessage, Comment, Rule, Task } from '../types/domain.ts';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -129,4 +131,42 @@ export function getArtifacts(taskId: string): Promise<ArtifactResponse> {
 /** 人の編集を新版として保存する（#10 §00 #12）。作成された Artifact（201）を返す。 */
 export function createArtifact(taskId: string, body: ArtifactCreate): Promise<Artifact> {
   return postJson<Artifact>(`/api/tasks/${taskId}/artifacts`, body);
+}
+
+/**
+ * 「✧ 学ぶ」でルール候補を生成する（#14 §5.3 learnFrom / §6.4a）。
+ * 完了系（you_review/reviewing/done）以外は 409。候補はサーバ非永続 —
+ * 採用/却下の判断ごとに adopt / dismiss へ内容を送り返す（subtask.proposal と同型）。
+ */
+export function getLearnProposals(taskId: string): Promise<RuleProposalDto[]> {
+  return request<RuleProposalDto[]>(`/api/tasks/${taskId}/learn`);
+}
+
+/**
+ * 蒸留候補を採用する（#14 §5.3 adoptLearn / §6.8 基準①）。201 で確定 Rule（K-xx）を返す。
+ * カードへのAIコメントは SSE（comment.created / task.updated）で届く。
+ */
+export function adoptLearn(taskId: string, body: LearnDecisionRequest): Promise<Rule> {
+  return postJson<Rule>(`/api/tasks/${taskId}/learn/adopt`, body);
+}
+
+/** 蒸留候補を却下する（#14 §5.3 dismissLearn）。feedback 記録のみで 204（body なし）。 */
+export async function dismissLearn(
+  taskId: string,
+  body: LearnDecisionRequest,
+): Promise<void> {
+  const path = `/api/tasks/${taskId}/learn/dismiss`;
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, `POST ${path} failed with status ${res.status}`);
+  }
+}
+
+/** 個人ルールをチームへ昇格する（#14 §1.8 promoteRule）。200 で scope=team の Rule（冪等）。 */
+export function promoteRule(ruleId: string): Promise<Rule> {
+  return request<Rule>(`/api/rules/${ruleId}/promote`, { method: 'POST' });
 }
