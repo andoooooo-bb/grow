@@ -5,6 +5,7 @@
 
 import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { useBoardStore } from '../../store/board.ts';
 import type { Task } from '../../types/domain.ts';
 import './ArtifactSection.css';
@@ -70,7 +71,8 @@ export function ArtifactSection({ task, canAssignAi }: ArtifactSectionProps) {
       {editText === null ? (
         <>
           <div className="artifact__preview">
-            <ReactMarkdown>{current.contentMd}</ReactMarkdown>
+            {/* GFM（比較表・§00 #1 レポートの核）を有効化 */}
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{current.contentMd}</ReactMarkdown>
           </div>
           <div className="artifact__actions">
             <button
