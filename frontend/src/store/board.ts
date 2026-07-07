@@ -5,18 +5,22 @@
 import { create } from 'zustand';
 import {
   assignAi as assignAiRequest,
+  confirmBreakdown as confirmBreakdownRequest,
   createArtifact,
   createComment,
   createTask,
   getArtifacts,
   getComments,
   patchTask,
+  sendChatMessage,
+  startChat as startChatRequest,
 } from '../lib/api.ts';
 import { canTransition } from '../lib/stateMachine.ts';
 import type {
   BoardResponse,
   LaneDto,
   SubtaskProposal,
+  SubtaskProposalEvent,
   TaskPatch,
 } from '../types/api.ts';
 import type {
@@ -45,13 +49,16 @@ export interface BoardState {
   commentError: Record<string, string | null>; // taskId -> コメント送信/取得失敗の簡易エラー（§5.4）
   boardError: string | null; // ボード操作（move/addCard/markDone, #8）の簡易エラー（§5.4）
   chat: Record<string, ChatMessage[]>; // taskId -> 壁打ちメッセージ
+  chatError: Record<string, string | null>; // taskId -> 壁打ち送信/開始失敗の簡易エラー（§5.4, #12）
   // 分解候補（taskId -> ）。§2.3 の記載は RuleProposal[] だが、
   // §3.3.3/§5.3 の通り 担当(owner)＋名称(title) を持つ SubtaskProposal（§7.4b）が実体。
   proposal: Record<string, SubtaskProposal[]>;
   learn: Record<string, RuleProposal[]>; // 蒸留候補（taskId -> ）
   artifacts: Record<string, Artifact[]>; // taskId -> 成果物の版（§00 #2。version 昇順・末尾が最新）
   drafts: Record<string, string>; // コンポーザ入力
+  chatDrafts: Record<string, string>; // 壁打ちコンポーザ入力（detail のコンポーザとは別持ち, #12）
   assigning: Record<string, boolean>; // taskId -> assign-ai 送信中（ボタン無効化, #10）
+  confirming: Record<string, boolean>; // taskId -> breakdown/confirm 送信中（ボタン無効化, #12）
 }
 
 export interface BoardActions {
@@ -67,6 +74,8 @@ export interface BoardActions {
   closeKnowledge: () => void;
   /** §5.3 onDraftInput: コンポーザ入力の保持 */
   setDraft: (taskId: string, text: string) => void;
+  /** 壁打ちコンポーザ入力の保持（#12。detail のコンポーザとは別領域） */
+  setChatDraft: (taskId: string, text: string) => void;
 
   // ---- コメント（#7） ----
   /** GET /tasks/:id/comments でスレッドを読み込む（ドロワーを開いたとき）。失敗は簡易エラー表示 */
@@ -109,13 +118,38 @@ export interface BoardActions {
   /** POST /tasks/:id/artifacts で編集内容を新版として保存する。成功で true */
   saveArtifact: (taskId: string, contentMd: string) => Promise<boolean>;
 
-  // ---- SSE 適用（#7 / #10 / src/lib/sse.ts から呼ばれる） ----
+  // ---- 壁打ち → 分解（#12 / §1.6 / §5.3） ----
+  /**
+   * §5.3 startChat: POST /tasks/:id/chat/start（冪等）→ 一覧を chat へセット →
+   * panelMode='chat'。初回の spec 遷移はサーバが行い task.updated（SSE）で同期する。
+   */
+  startChat: (taskId: string) => Promise<void>;
+  /**
+   * §5.3 sendChat: 楽観的追加（即UI反映・入力クリア）→ POST → id 差し替え。
+   * 失敗ならロールバック（§5.4）。AI応答＋分解候補は +0.85s 後に SSE で届く。
+   */
+  sendChat: (taskId: string, text: string) => Promise<void>;
+  /**
+   * §5.3 confirmBreakdown: proposal を body に POST /breakdown/confirm →
+   * 応答 {parent, children} を反映 → proposal クリア → panelMode='detail'。
+   * 409/422/通信失敗は boardError 表示のみで proposal は残す。
+   */
+  confirmBreakdown: (taskId: string) => Promise<void>;
+
+  // ---- SSE 適用（#7 / #10 / #12 / src/lib/sse.ts から呼ばれる） ----
   /** task.updated: カードを差し替え、レーン移動も反映（全レーンから除去→laneKey へ挿入） */
   applyTaskUpdated: (task: Task) => void;
   /** comment.created: 読込済みスレッドへ追記（自分の楽観的追加との重複は id で排除） */
   applyCommentCreated: (comment: Comment) => void;
   /** artifact.created: version 昇順を保って追記（POST 応答との重複は id で排除） */
   applyArtifactCreated: (artifact: Artifact) => void;
+  /**
+   * chat.message.created: 開始済みの壁打ちへ追記（#12）。人メッセージ送信時も配信される
+   * ため、id 重複排除＋自分の楽観的追加（tmp-）との差し替えを行う。
+   */
+  applyChatMessageCreated: (message: ChatMessage) => void;
+  /** subtask.proposal: 分解候補を proposal[taskId] へセットする（#12。サーバ非永続） */
+  applySubtaskProposal: (event: SubtaskProposalEvent) => void;
 }
 
 export type BoardStore = BoardState & BoardActions;
@@ -133,15 +167,18 @@ export function createInitialBoardState(): BoardState {
     commentError: {},
     boardError: null,
     chat: {},
+    chatError: {},
     proposal: {},
     learn: {},
     artifacts: {},
     drafts: {},
+    chatDrafts: {},
     assigning: {},
+    confirming: {},
   };
 }
 
-// ---- 楽観的追加の一時ID（#7） ----
+// ---- 楽観的追加の一時ID（#7 コメント / #12 壁打ちで共用） ----
 
 let tempSeq = 0;
 
@@ -151,7 +188,7 @@ export function nextTempCommentId(): string {
   return `tmp-${tempSeq}`;
 }
 
-function isTempCommentId(id: string): boolean {
+function isTempId(id: string): boolean {
   return id.startsWith('tmp-');
 }
 
@@ -189,6 +226,8 @@ export const useBoardStore = create<BoardStore>()((set, get) => ({
   closeKnowledge: () => set({ showKnowledge: false }),
   setDraft: (taskId, text) =>
     set((s) => ({ drafts: { ...s.drafts, [taskId]: text } })),
+  setChatDraft: (taskId, text) =>
+    set((s) => ({ chatDrafts: { ...s.chatDrafts, [taskId]: text } })),
 
   // ---- コメント（#7） ----
   loadComments: async (taskId) => {
@@ -196,7 +235,7 @@ export const useBoardStore = create<BoardStore>()((set, get) => ({
       const loaded = await getComments(taskId);
       set((s) => {
         // 送信中の楽観的追加（tmp-）は消さずに末尾へ残す（読込と送信の競合対策）
-        const pending = (s.comments[taskId] ?? []).filter((c) => isTempCommentId(c.id));
+        const pending = (s.comments[taskId] ?? []).filter((c) => isTempId(c.id));
         return {
           comments: { ...s.comments, [taskId]: [...loaded, ...pending] },
           commentError: { ...s.commentError, [taskId]: null },
@@ -398,7 +437,93 @@ export const useBoardStore = create<BoardStore>()((set, get) => ({
     }
   },
 
-  // ---- SSE 適用（#7 / #10） ----
+  // ---- 壁打ち → 分解（#12 / §1.6 / §5.3） ----
+  startChat: async (taskId) => {
+    if (get().cards[taskId] === undefined) return;
+    try {
+      // 冪等: chat が空のときだけサーバが AI 初期質問を生成・spec 遷移（task.updated は SSE）。
+      // 既存履歴があれば一覧が返るだけなので、再実行しても壊れない。
+      const messages = await startChatRequest(taskId);
+      set((s) => ({
+        chat: { ...s.chat, [taskId]: messages },
+        chatError: { ...s.chatError, [taskId]: null },
+        panelMode: 'chat',
+      }));
+    } catch {
+      // 開始できなければ detail のまま（§5.4 簡易エラー）
+      set({ boardError: '壁打ちを開始できませんでした' });
+    }
+  },
+  sendChat: async (taskId, text) => {
+    const trimmed = text.trim();
+    if (trimmed === '') return;
+    const tempId = nextTempCommentId();
+    const optimistic: ChatMessage = {
+      id: tempId,
+      taskId,
+      author: 'human',
+      text: trimmed,
+      createdAt: new Date().toISOString(),
+    };
+    // §5.3 sendChat step1: 入力クリア → 即UI反映（§5.4 楽観的更新）
+    set((s) => ({
+      chat: { ...s.chat, [taskId]: [...(s.chat[taskId] ?? []), optimistic] },
+      chatDrafts: { ...s.chatDrafts, [taskId]: '' },
+      chatError: { ...s.chatError, [taskId]: null },
+    }));
+    try {
+      const created = await sendChatMessage(taskId, { text: trimmed });
+      set((s) => {
+        const list = s.chat[taskId] ?? [];
+        // SSE の chat.message.created が先に確定版を届けている場合は temp の除去だけ
+        const next = list.some((m) => m.id === created.id)
+          ? list.filter((m) => m.id !== tempId)
+          : list.map((m) => (m.id === tempId ? created : m));
+        return { chat: { ...s.chat, [taskId]: next } };
+      });
+    } catch {
+      // ロールバック（§5.4）: 楽観的追加を取り消して簡易エラー
+      set((s) => ({
+        chat: {
+          ...s.chat,
+          [taskId]: (s.chat[taskId] ?? []).filter((m) => m.id !== tempId),
+        },
+        chatError: { ...s.chatError, [taskId]: 'メッセージの送信に失敗しました' },
+      }));
+    }
+  },
+  confirmBreakdown: async (taskId) => {
+    const s = get();
+    const subtasks = s.proposal[taskId];
+    if (subtasks === undefined || subtasks.length === 0) return; // 候補なしは no-op（422 予防）
+    if (s.confirming[taskId] === true) return; // 二重送信防止（ボタンも無効化）
+    set((st) => ({
+      confirming: { ...st.confirming, [taskId]: true },
+      boardError: null,
+    }));
+    try {
+      // 候補（title/owner）をそのまま送り返す（rationale は表示専用なので送らない）
+      const res = await confirmBreakdownRequest(taskId, {
+        subtasks: subtasks.map(({ title, owner }) => ({ title, owner })),
+      });
+      // 応答反映（SSE 先着でも applyTaskUpdated は差し替えなので冪等）:
+      // 子 → todo レーン末尾へ順に、親 → childIds 込みで progress 先頭へ
+      for (const child of res.children) get().applyTaskUpdated(child);
+      get().applyTaskUpdated(res.parent);
+      set((st) => {
+        const proposal = { ...st.proposal };
+        delete proposal[taskId]; // 反映済み候補をクリア（§5.3）
+        return { proposal, panelMode: 'detail' };
+      });
+    } catch {
+      // 409（breakdown/done 親）/ 422 / 通信失敗: proposal は残す（§5.4）
+      set({ boardError: 'ボードへの反映に失敗しました' });
+    } finally {
+      set((st) => ({ confirming: { ...st.confirming, [taskId]: false } }));
+    }
+  },
+
+  // ---- SSE 適用（#7 / #10 / #12） ----
   applyTaskUpdated: (task) =>
     set((s) => {
       const lanes = s.lanes.map((lane) => {
@@ -425,7 +550,7 @@ export const useBoardStore = create<BoardStore>()((set, get) => ({
       // 自分の楽観的追加（同一 author+text の tmp-）が送信中なら、確定版として差し替える
       // （SSE は POST 応答より先に届きうるため。confirmComment 側の id 重複排除と対になる）
       const pendingIndex = list.findIndex(
-        (c) => isTempCommentId(c.id) && c.author === comment.author && c.text === comment.text,
+        (c) => isTempId(c.id) && c.author === comment.author && c.text === comment.text,
       );
       const next =
         pendingIndex >= 0
@@ -442,6 +567,27 @@ export const useBoardStore = create<BoardStore>()((set, get) => ({
       const next = [...list, artifact].sort((a, b) => a.version - b.version);
       return { artifacts: { ...s.artifacts, [artifact.taskId]: next } };
     }),
+  applyChatMessageCreated: (message) =>
+    set((s) => {
+      const list = s.chat[message.taskId];
+      // 未開始の壁打ちは何もしない（startChat の POST 応答が一覧を丸ごと返す）
+      if (!list) return {};
+      if (list.some((m) => m.id === message.id)) return {}; // id 重複排除
+      // 人メッセージ送信時も配信されるため、自分の楽観的追加（同一 author+text の tmp-）が
+      // 送信中なら確定版として差し替える（sendChat 側の id 重複排除と対になる）
+      const pendingIndex = list.findIndex(
+        (m) => isTempId(m.id) && m.author === message.author && m.text === message.text,
+      );
+      const next =
+        pendingIndex >= 0
+          ? list.map((m, i) => (i === pendingIndex ? message : m))
+          : [...list, message];
+      return { chat: { ...s.chat, [message.taskId]: next } };
+    }),
+  applySubtaskProposal: (event) =>
+    set((s) => ({
+      proposal: { ...s.proposal, [event.taskId]: event.subtasks },
+    })),
 }));
 
 // ---- 派生値（§5.1: render のたび計算, 保存しない） ----

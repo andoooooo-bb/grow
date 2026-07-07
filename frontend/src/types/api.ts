@@ -61,6 +61,36 @@ export interface ChatMessageCreate {
   text: string;
 }
 
+// POST /tasks/:id/chat の実リクエスト（#11。送信者は常に human）
+export interface ChatSendRequest {
+  text: string;
+}
+
+// ---- 壁打ち → 分解（§1.6 / §5.3 confirmBreakdown, #11/#12） ----
+// confirmBreakdown の1項目（クライアントが subtask.proposal の候補を送り返す）
+export interface BreakdownConfirmItem {
+  title: string;
+  owner: Owner; // ai → queued（先頭のみ ai_work）/ human → you_todo
+}
+
+// POST /tasks/:id/breakdown/confirm（1件以上。空配列は 422）
+export interface BreakdownConfirmRequest {
+  subtasks: BreakdownConfirmItem[];
+}
+
+// confirmBreakdown の応答（親は childIds 込み・子は生成順）
+export interface BreakdownConfirmResponse {
+  parent: Task;
+  children: Task[];
+}
+
+// subtask.proposal イベントの payload（#11。候補はサーバ非永続 —
+// SSE で届いた候補を proposal[taskId] に保持し、confirm で送り返す）
+export interface SubtaskProposalEvent {
+  taskId: string;
+  subtasks: SubtaskProposal[];
+}
+
 // ---- 成果物 ----
 // GET /tasks/:id/artifacts（版の一覧。最大 version が最新）
 export interface ArtifactResponse {

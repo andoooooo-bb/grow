@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { boardFixture } from '../test/boardFixture.ts';
-import type { Artifact, Comment, LaneKey, Task } from '../types/domain.ts';
+import type { SubtaskProposal } from '../types/api.ts';
+import type {
+  Artifact,
+  ChatMessage,
+  Comment,
+  LaneKey,
+  Task,
+} from '../types/domain.ts';
 import {
   ADD_CARD_AI_PROMPT,
   createInitialBoardState,
@@ -608,5 +615,349 @@ describe('artifacts（#10）', () => {
     expect(ok).toBe(false);
     expect(useBoardStore.getState().boardError).toBe('成果物の保存に失敗しました');
     expect(useBoardStore.getState().artifacts['T-091']).toBeUndefined();
+  });
+});
+
+// ---- 壁打ち → 分解（#12: §1.6 / §5.3 startChat・sendChat・confirmBreakdown） ----
+
+function makeChatMessage(
+  partial: Partial<ChatMessage> & Pick<ChatMessage, 'id' | 'text'>,
+): ChatMessage {
+  return { taskId: 'T-130', author: 'ai', createdAt: AT, ...partial };
+}
+
+/** confirm 応答の子カード（parentId=T-130, todo レーン末尾へ生成順） */
+function makeChild(id: string, title: string, orderInLane: number, status: Task['status']): Task {
+  return {
+    ...boardFixture().cards['T-130'],
+    id,
+    title,
+    laneKey: 'todo',
+    orderInLane,
+    status,
+    parentId: 'T-130',
+    childIds: undefined,
+    progress: status === 'ai_work' ? 10 : undefined,
+  };
+}
+
+/** mock provider（SUBTASKS_T130）と同じ 5 件の分解候補 */
+function proposalFixture(): SubtaskProposal[] {
+  return [
+    { title: '情報設計・サイトマップ作成', owner: 'ai' },
+    { title: 'ワイヤーフレーム作成', owner: 'ai' },
+    { title: '掲載する実績コンテンツの選定', owner: 'human', rationale: '本人の意思決定が必要' },
+    { title: 'デザイン方向性の決定', owner: 'human', rationale: '好みの判断は人が行う' },
+    { title: 'コーディング・実装', owner: 'ai' },
+  ];
+}
+
+describe('startChat（#12: §5.3）', () => {
+  beforeEach(() => {
+    useBoardStore.setState({ ...createInitialBoardState(), ...boardFixture() });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('POST /tasks/:id/chat/start → 一覧を chat へセットし panelMode=chat', async () => {
+    const greeting = makeChatMessage({ id: 'm-1', text: '① 公開したい時期は？' });
+    const fetchMock = vi.fn(async () => jsonResponse(200, [greeting]));
+    vi.stubGlobal('fetch', fetchMock);
+    useBoardStore.getState().select('T-130'); // panelMode='detail'
+
+    await useBoardStore.getState().startChat('T-130');
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/tasks/T-130/chat/start',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    const s = useBoardStore.getState();
+    expect(s.chat['T-130']).toEqual([greeting]);
+    expect(s.panelMode).toBe('chat');
+    expect(s.chatError['T-130']).toBeNull();
+  });
+
+  it('冪等: 既存 chat があっても再POSTでサーバの一覧に同期されるだけで壊れない', async () => {
+    const history = [
+      makeChatMessage({ id: 'm-1', text: '① 公開したい時期は？' }),
+      makeChatMessage({ id: 'm-2', author: 'human', text: '来月中に公開したい' }),
+    ];
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(200, history)));
+
+    await useBoardStore.getState().startChat('T-130');
+    await useBoardStore.getState().startChat('T-130'); // 2回目（detail→chat の再入）
+
+    const s = useBoardStore.getState();
+    expect(s.chat['T-130']).toEqual(history); // 重複しない
+    expect(s.panelMode).toBe('chat');
+  });
+
+  it('失敗時は boardError を設定し detail のまま', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(500, {})));
+    useBoardStore.getState().select('T-130');
+
+    await useBoardStore.getState().startChat('T-130');
+
+    const s = useBoardStore.getState();
+    expect(s.panelMode).toBe('detail');
+    expect(s.boardError).toBe('壁打ちを開始できませんでした');
+    expect(s.chat['T-130']).toBeUndefined();
+  });
+
+  it('store に無いカードでは API を呼ばない', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    await useBoardStore.getState().startChat('T-999');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('sendChat（#12: §5.3 / §5.4 楽観的更新）', () => {
+  beforeEach(() => {
+    useBoardStore.setState({
+      ...createInitialBoardState(),
+      ...boardFixture(),
+      panelMode: 'chat',
+      chat: { 'T-130': [makeChatMessage({ id: 'm-1', text: '① 公開したい時期は？' })] },
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('楽観的追加（即UI反映・chatDrafts クリア）→ POST {text} → 確定版へ id 差し替え', async () => {
+    const server = makeChatMessage({ id: 'm-2', author: 'human', text: '来月中に公開したい' });
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        jsonResponse(201, server),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    useBoardStore.getState().setChatDraft('T-130', '来月中に公開したい');
+
+    const pending = useBoardStore.getState().sendChat('T-130', '来月中に公開したい');
+
+    // await 前 = API 応答前に反映されている（§5.4 楽観的更新）
+    let s = useBoardStore.getState();
+    expect(s.chat['T-130']).toHaveLength(2);
+    expect(s.chat['T-130'][1].id).toMatch(/^tmp-/);
+    expect(s.chat['T-130'][1].text).toBe('来月中に公開したい');
+    expect(s.chatDrafts['T-130']).toBe('');
+
+    await pending;
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/tasks/T-130/chat',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      text: '来月中に公開したい',
+    });
+    s = useBoardStore.getState();
+    expect(s.chat['T-130']).toHaveLength(2);
+    expect(s.chat['T-130'][1]).toEqual(server); // id 差し替え（増えない）
+  });
+
+  it('SSE が先に確定版を届けていたら POST 応答では temp の除去だけ行う（重複排除）', async () => {
+    const server = makeChatMessage({ id: 'm-2', author: 'human', text: '来月中に公開したい' });
+    let resolvePost!: (value: unknown) => void;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise((resolve) => (resolvePost = resolve))),
+    );
+
+    const pending = useBoardStore.getState().sendChat('T-130', '来月中に公開したい');
+    // 楽観的追加が入った状態で SSE（chat.message.created）が先着
+    useBoardStore.getState().applyChatMessageCreated(server);
+    // applyChatMessageCreated が temp を確定版へ差し替える
+    expect(useBoardStore.getState().chat['T-130']).toHaveLength(2);
+    expect(useBoardStore.getState().chat['T-130'][1]).toEqual(server);
+
+    resolvePost(jsonResponse(201, server));
+    await pending;
+    const list = useBoardStore.getState().chat['T-130'];
+    expect(list).toHaveLength(2); // 二重にならない
+    expect(list.filter((m) => m.id === 'm-2')).toHaveLength(1);
+  });
+
+  it('失敗時は楽観的追加をロールバックし chatError を設定する', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(500, {})));
+
+    await useBoardStore.getState().sendChat('T-130', '失敗するメッセージ');
+
+    const s = useBoardStore.getState();
+    expect(s.chat['T-130']).toHaveLength(1); // 初期質問のみ
+    expect(s.chatError['T-130']).toBe('メッセージの送信に失敗しました');
+  });
+
+  it('空白のみの入力は送信しない', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    await useBoardStore.getState().sendChat('T-130', '  \n ');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(useBoardStore.getState().chat['T-130']).toHaveLength(1);
+  });
+});
+
+describe('applyChatMessageCreated / applySubtaskProposal（#12: SSE 適用）', () => {
+  beforeEach(() => {
+    useBoardStore.setState({ ...createInitialBoardState(), ...boardFixture() });
+  });
+
+  it('開始済みの壁打ちへ追記し、id 重複を排除する', () => {
+    useBoardStore.setState((s) => ({
+      chat: { ...s.chat, 'T-130': [makeChatMessage({ id: 'm-1', text: '初期質問' })] },
+    }));
+    const reply = makeChatMessage({ id: 'm-2', text: 'いかがでしょう。' });
+
+    useBoardStore.getState().applyChatMessageCreated(reply);
+    expect(useBoardStore.getState().chat['T-130']).toHaveLength(2);
+
+    useBoardStore.getState().applyChatMessageCreated(reply); // 再送は無視
+    expect(useBoardStore.getState().chat['T-130']).toHaveLength(2);
+  });
+
+  it('未開始（chat 未セット）のタスクへのメッセージは無視する', () => {
+    useBoardStore
+      .getState()
+      .applyChatMessageCreated(makeChatMessage({ id: 'm-1', text: '初期質問' }));
+    expect(useBoardStore.getState().chat['T-130']).toBeUndefined();
+  });
+
+  it('applySubtaskProposal が proposal[taskId] をセットする', () => {
+    useBoardStore
+      .getState()
+      .applySubtaskProposal({ taskId: 'T-130', subtasks: proposalFixture() });
+    expect(useBoardStore.getState().proposal['T-130']).toHaveLength(5);
+    expect(useBoardStore.getState().proposal['T-130'][0]).toEqual({
+      title: '情報設計・サイトマップ作成',
+      owner: 'ai',
+    });
+  });
+});
+
+describe('confirmBreakdown（#12: §1.6 step5 / §5.3）', () => {
+  const children = [
+    makeChild('T-131', '情報設計・サイトマップ作成', 3, 'ai_work'), // 先頭AI子は自動着手
+    makeChild('T-132', 'ワイヤーフレーム作成', 4, 'queued'),
+    makeChild('T-133', '掲載する実績コンテンツの選定', 5, 'you_todo'),
+    makeChild('T-134', 'デザイン方向性の決定', 6, 'you_todo'),
+    makeChild('T-135', 'コーディング・実装', 7, 'queued'),
+  ];
+  const parent: Task = {
+    ...boardFixture().cards['T-130'],
+    status: 'ai_work',
+    laneKey: 'progress',
+    orderInLane: 0,
+    childIds: ['T-131', 'T-132', 'T-133', 'T-134', 'T-135'],
+    commentCount: 1,
+  };
+
+  beforeEach(() => {
+    useBoardStore.setState({
+      ...createInitialBoardState(),
+      ...boardFixture(),
+      selectedId: 'T-130',
+      panelMode: 'chat',
+      proposal: { 'T-130': proposalFixture() },
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('proposal を body に POST → 応答反映（子は todo 末尾・親は progress 先頭）→ proposal クリア → detail 復帰', async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        jsonResponse(200, { parent, children }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await useBoardStore.getState().confirmBreakdown('T-130');
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/tasks/T-130/breakdown/confirm',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    // body は候補の title/owner のみ（rationale は送らない）
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      subtasks: [
+        { title: '情報設計・サイトマップ作成', owner: 'ai' },
+        { title: 'ワイヤーフレーム作成', owner: 'ai' },
+        { title: '掲載する実績コンテンツの選定', owner: 'human' },
+        { title: 'デザイン方向性の決定', owner: 'human' },
+        { title: 'コーディング・実装', owner: 'ai' },
+      ],
+    });
+
+    const s = useBoardStore.getState();
+    // 子5枚が todo レーン末尾へ生成順に並ぶ（§1.6 step5）
+    expect(laneIds('todo')).toEqual([
+      'T-104', 'T-109', 'T-112', 'T-131', 'T-132', 'T-133', 'T-134', 'T-135',
+    ]);
+    expect(s.cards['T-131'].status).toBe('ai_work'); // 先頭AI子は自動着手
+    expect(s.cards['T-131'].progress).toBe(10);
+    expect(s.cards['T-133'].parentId).toBe('T-130');
+    // 親は ai_work で progress レーン先頭・childIds 込み
+    expect(laneIds('progress')).toEqual(['T-130', 'T-098', 'T-101']);
+    expect(laneIds('backlog')).toEqual(['T-121']); // 元レーンから除去
+    expect(s.cards['T-130'].childIds).toEqual(parent.childIds);
+    // proposal クリア＋detail 復帰（§5.3）
+    expect(s.proposal['T-130']).toBeUndefined();
+    expect(s.panelMode).toBe('detail');
+    expect(s.confirming['T-130']).toBe(false);
+    expect(s.boardError).toBeNull();
+  });
+
+  it('409（breakdown/done 親）は boardError 表示＋proposal は残す＋chat のまま', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(409, {})));
+
+    await useBoardStore.getState().confirmBreakdown('T-130');
+
+    const s = useBoardStore.getState();
+    expect(s.boardError).toBe('ボードへの反映に失敗しました');
+    expect(s.proposal['T-130']).toHaveLength(5); // 残る（再試行できる）
+    expect(s.panelMode).toBe('chat');
+    expect(s.confirming['T-130']).toBe(false);
+  });
+
+  it('proposal が無ければ API を呼ばない（422 予防）', async () => {
+    useBoardStore.setState({ proposal: {} });
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await useBoardStore.getState().confirmBreakdown('T-130');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('confirm 送信中は二重送信しない', async () => {
+    let resolvePost!: (value: unknown) => void;
+    const fetchMock = vi.fn(() => new Promise((resolve) => (resolvePost = resolve)));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const first = useBoardStore.getState().confirmBreakdown('T-130');
+    expect(useBoardStore.getState().confirming['T-130']).toBe(true);
+    const second = useBoardStore.getState().confirmBreakdown('T-130'); // 送信中の再クリック
+
+    resolvePost(jsonResponse(200, { parent, children }));
+    await Promise.all([first, second]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('applyTaskUpdated: 未知 id の挿入（#12: 分解直後の子カード出現）', () => {
+  beforeEach(() => {
+    useBoardStore.setState({ ...createInitialBoardState(), ...boardFixture() });
+  });
+
+  it('store に無い id の task.updated でもカードを追加しレーンへ挿入する', () => {
+    const child = makeChild('T-131', '情報設計・サイトマップ作成', 3, 'ai_work');
+    useBoardStore.getState().applyTaskUpdated(child);
+
+    const s = useBoardStore.getState();
+    expect(s.cards['T-131']).toEqual(child);
+    expect(laneIds('todo')).toEqual(['T-104', 'T-109', 'T-112', 'T-131']);
   });
 });

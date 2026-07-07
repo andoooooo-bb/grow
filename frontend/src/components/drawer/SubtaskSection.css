@@ -1,0 +1,54 @@
+/* サブタスクセクション（§3.3.2d #12）: flex:none, padding 14px 18px, 下線 */
+.subtask-section {
+  flex: none;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--color-divider);
+}
+
+/* 見出し「サブタスク {done}/{total}」11px/700 #7a818b */
+.subtask-section__heading {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--color-text-secondary);
+  letter-spacing: 0.04em;
+  margin-bottom: 10px;
+}
+
+.subtask-section__list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+/* 子行（枠 #eceef2, radius8px, padding 8px 10px, hover #fafbfc, クリックで子ドロワーへ） */
+.subtask-section__row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-divider-list);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+}
+
+.subtask-section__row:hover {
+  background: var(--color-surface-soft);
+}
+
+/* タイトル 12px #3a3f48 */
+.subtask-section__title {
+  flex: 1;
+  font-size: 12px;
+  color: var(--color-text-body);
+  line-height: 1.4;
+}
+
+/* 右のステータスラベル 9.5px #9aa0a8 */
+.subtask-section__status {
+  flex: none;
+  font-size: 9.5px;
+  color: var(--color-text-weakest);
+}

@@ -1,6 +1,7 @@
-// カード詳細ドロワー（§3.3, #7/#10）: 選択時のみ表示。detail モード（ヘッダ・アクションバー・
-// 適用ルール(b)・成果物(c-2)・アクティビティスレッド・コンポーザ）を実装。
-// chat モード（§3.3.3）は #12、学習(c)・サブタスク(d)の各セクションは後続 Issue（#13/#14）。
+// カード詳細ドロワー（§3.3, #7/#10/#12）: 選択時のみ表示。
+// detail モード（ヘッダ・アクションバー・適用ルール(b)・成果物(c-2)・サブタスク(d)・
+// アクティビティスレッド・コンポーザ）と chat モード（§3.3.3 壁打ち）を panelMode で切替。
+// 学習(c)セクションは後続 Issue（#13）。
 
 import { useEffect } from 'react';
 import { useBoardStore } from '../../store/board.ts';
@@ -8,8 +9,10 @@ import { ActionBar } from './ActionBar';
 import { ActivityThread } from './ActivityThread';
 import { AppliedRules } from './AppliedRules';
 import { ArtifactSection } from './ArtifactSection';
+import { ChatMode } from './ChatMode';
 import { Composer } from './Composer';
 import { DrawerHeader } from './DrawerHeader';
+import { SubtaskSection } from './SubtaskSection';
 import './Drawer.css';
 
 export function Drawer() {
@@ -22,6 +25,7 @@ export function Drawer() {
   const loadArtifacts = useBoardStore((s) => s.loadArtifacts);
   const markDone = useBoardStore((s) => s.markDone);
   const assignAi = useBoardStore((s) => s.assignAi);
+  const startChat = useBoardStore((s) => s.startChat);
   const assigning = useBoardStore((s) =>
     s.selectedId !== null ? (s.assigning[s.selectedId] ?? false) : false,
   );
@@ -45,20 +49,26 @@ export function Drawer() {
   return (
     <aside className="drawer">
       <DrawerHeader task={task} />
-      {panelMode === 'detail' && (
+      {panelMode === 'chat' ? (
+        // chat モード（§3.3.3, #12）: ヘッダ帯＋チャット領域＋コンポーザのみ
+        <ChatMode task={task} />
+      ) : (
         <div className="drawer__detail">
-          {/* markDone 結線（#8）。done カードでは「完了にする」を出さない（§03） */}
+          {/* markDone 結線（#8）・startChat 結線（#12）。done カードでは「完了にする」を出さない（§03） */}
           <ActionBar
             onAssignAi={() => void assignAi(task.id)}
             assignAiDisabled={!canAssignAi}
+            onStartChat={() => void startChat(task.id)}
             onMarkDone={
               task.status !== 'done' ? () => void markDone(task.id) : undefined
             }
           />
           {/* (b) 適用ルール（§3.3.2b, #10）: retrieval 0件時はコンポーネント側で非表示 */}
           <AppliedRules task={task} />
-          {/* (c-2) 成果物（§3.3.2 c-2, #10）: 学習(c)/サブタスク(d)実装後もこの間に置く */}
+          {/* (c-2) 成果物（§3.3.2 c-2, #10）: 学習(c)実装後も AppliedRules との間に置く */}
           <ArtifactSection task={task} canAssignAi={canAssignAi} />
+          {/* (d) サブタスク（§3.3.2d, #12）: childIds が無ければコンポーネント側で非表示 */}
+          <SubtaskSection task={task} />
           <ActivityThread taskId={task.id} />
           <Composer taskId={task.id} />
         </div>

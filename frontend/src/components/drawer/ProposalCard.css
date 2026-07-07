@@ -1,0 +1,86 @@
+/* 分解候補カード（§3.3.3 #12）: 枠 #e3dbf6 1.5px, radius12px, msgin */
+.proposal-card {
+  border: 1.5px solid var(--color-purple-border);
+  border-radius: 12px;
+  overflow: hidden;
+  animation: var(--anim-msgin);
+}
+
+/* ヘッダ「提案された分解 — {N} 件」（背景 #f1edfb, 11.5px/700 #5d4eb0） */
+.proposal-card__header {
+  background: var(--color-purple-bg);
+  padding: 10px 13px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--color-purple);
+}
+
+.proposal-card__body {
+  padding: 6px 13px 13px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 候補行: 担当ミニバッジ＋名称。下線 #f3f1f9 */
+.proposal-card__row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--color-divider-list-2);
+}
+
+/* 担当ミニバッジ（AI = #0b7a72/#e1f3f1、あなた = #b5781f/#fcefe0） */
+.proposal-card__owner {
+  flex: none;
+  font-size: 9px;
+  font-weight: 700;
+  border-radius: var(--radius-badge);
+  padding: 3px 6px;
+}
+
+.proposal-card__owner--ai {
+  color: var(--color-teal-dark);
+  background: var(--color-teal-bg);
+}
+
+.proposal-card__owner--human {
+  color: var(--color-amber-text2);
+  background: var(--color-amber-bg2);
+}
+
+/* 名称 12px #3a3f48 */
+.proposal-card__title {
+  flex: 1;
+  font-size: 12px;
+  color: var(--color-text-body);
+  line-height: 1.45;
+}
+
+/* 「この内容でボードに反映する」プライマリ（白文字, #5d4eb0, radius9px, 幅いっぱい） */
+.proposal-card__confirm {
+  margin-top: 13px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--color-purple);
+  border: none;
+  border-radius: var(--radius-button-lg);
+  padding: 11px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.proposal-card__confirm:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* 補足「反映後、AIが着手できるサブタスクから自動で進めます」10.5px #9aa0a8 中央 */
+.proposal-card__note {
+  margin-top: 8px;
+  font-size: 10.5px;
+  color: var(--color-text-weakest);
+  text-align: center;
+  line-height: 1.5;
+}

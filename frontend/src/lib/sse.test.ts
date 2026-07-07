@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createInitialBoardState, useBoardStore } from '../store/board.ts';
 import { boardFixture } from '../test/boardFixture.ts';
-import type { Artifact, Comment, Task } from '../types/domain.ts';
+import type { Artifact, ChatMessage, Comment, Task } from '../types/domain.ts';
 import {
   ARTIFACT_CREATED,
+  CHAT_MESSAGE_CREATED,
   COMMENT_CREATED,
   EVENTS_URL,
+  SUBTASK_PROPOSAL,
   TASK_UPDATED,
   connectEvents,
 } from './sse.ts';
@@ -161,5 +163,57 @@ describe('connectEvents（§5.4 / #7）', () => {
     const v2: Artifact = { ...v1, id: 'a-2', version: 2, contentMd: '# 改訂版' };
     lastSource().emit(ARTIFACT_CREATED, v2);
     expect(useBoardStore.getState().artifacts['T-104']).toEqual([v1, v2]);
+  });
+
+  it('chat.message.created で開始済みの壁打ちへ追記する（#12。id で重複排除）', () => {
+    connectEvents();
+    useBoardStore.setState((s) => ({ chat: { ...s.chat, 'T-130': [] } }));
+    const message: ChatMessage = {
+      id: 'm-1',
+      taskId: 'T-130',
+      author: 'ai',
+      text: 'いただいた前提をふまえ、次のように分解するのはいかがでしょう。',
+      createdAt: AT,
+    };
+
+    lastSource().emit(CHAT_MESSAGE_CREATED, message);
+    expect(useBoardStore.getState().chat['T-130']).toEqual([message]);
+
+    // 同一 id の再送（POST 応答との二重適用）は無視される
+    lastSource().emit(CHAT_MESSAGE_CREATED, message);
+    expect(useBoardStore.getState().chat['T-130']).toHaveLength(1);
+  });
+
+  it('chat.message.created は人メッセージの楽観的追加（tmp-）を確定版に差し替える（#12）', () => {
+    connectEvents();
+    const pending: ChatMessage = {
+      id: 'tmp-77',
+      taskId: 'T-130',
+      author: 'human',
+      text: '来月中に公開したい',
+      createdAt: AT,
+    };
+    useBoardStore.setState((s) => ({ chat: { ...s.chat, 'T-130': [pending] } }));
+
+    lastSource().emit(CHAT_MESSAGE_CREATED, { ...pending, id: 'm-2' });
+    const list = useBoardStore.getState().chat['T-130'];
+    expect(list).toHaveLength(1);
+    expect(list[0].id).toBe('m-2');
+  });
+
+  it('subtask.proposal で分解候補を proposal[taskId] へセットする（#12）', () => {
+    connectEvents();
+    lastSource().emit(SUBTASK_PROPOSAL, {
+      taskId: 'T-130',
+      subtasks: [
+        { title: '情報設計・サイトマップ作成', owner: 'ai' },
+        { title: '掲載する実績コンテンツの選定', owner: 'human', rationale: '意思決定が必要' },
+      ],
+    });
+
+    const proposal = useBoardStore.getState().proposal['T-130'];
+    expect(proposal).toHaveLength(2);
+    expect(proposal[0]).toEqual({ title: '情報設計・サイトマップ作成', owner: 'ai' });
+    expect(proposal[1].owner).toBe('human');
   });
 });

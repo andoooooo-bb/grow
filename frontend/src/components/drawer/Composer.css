@@ -41,3 +41,8 @@
   cursor: pointer;
   font-family: inherit;
 }
+
+/* chat モードの「送信」（§3.3.3 #12）: パープル #5d4eb0 */
+.composer__send--chat {
+  background: var(--color-purple);
+}

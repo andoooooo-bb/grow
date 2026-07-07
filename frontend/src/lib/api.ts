@@ -5,11 +5,14 @@ import type {
   ArtifactResponse,
   AssignAiResponse,
   BoardResponse,
+  BreakdownConfirmRequest,
+  BreakdownConfirmResponse,
+  ChatSendRequest,
   CommentCreate,
   TaskCreate,
   TaskPatch,
 } from '../types/api.ts';
-import type { Artifact, Comment, Task } from '../types/domain.ts';
+import type { Artifact, ChatMessage, Comment, Task } from '../types/domain.ts';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -76,6 +79,46 @@ export function assignAi(taskId: string): Promise<AssignAiResponse> {
   return request<AssignAiResponse>(`/api/tasks/${taskId}/assign-ai`, {
     method: 'POST',
   });
+}
+
+/** 壁打ちメッセージ一覧を作成時刻の昇順で取得する（#12）。 */
+export function getChatMessages(taskId: string): Promise<ChatMessage[]> {
+  return request<ChatMessage[]>(`/api/tasks/${taskId}/chat`);
+}
+
+/**
+ * 壁打ちを開始する（#12 §5.3 startChat）。冪等 — chat が空のときだけ
+ * AI 初期質問を生成し spec 遷移。更新後のメッセージ一覧を返す。
+ */
+export function startChat(taskId: string): Promise<ChatMessage[]> {
+  return request<ChatMessage[]>(`/api/tasks/${taskId}/chat/start`, {
+    method: 'POST',
+  });
+}
+
+/**
+ * 壁打ちに人メッセージを送信する（#12 §5.3 sendChat step1）。201 で確定版を返す。
+ * AI応答＋分解候補は +0.85s 後に SSE（chat.message.created / subtask.proposal）で届く。
+ */
+export function sendChatMessage(
+  taskId: string,
+  body: ChatSendRequest,
+): Promise<ChatMessage> {
+  return postJson<ChatMessage>(`/api/tasks/${taskId}/chat`, body);
+}
+
+/**
+ * 分解候補をボードに反映する（#12 §1.6 step5 / §5.3 confirmBreakdown）。
+ * {parent, children} を返す。breakdown/done 親は 409、空配列は 422。
+ */
+export function confirmBreakdown(
+  taskId: string,
+  body: BreakdownConfirmRequest,
+): Promise<BreakdownConfirmResponse> {
+  return postJson<BreakdownConfirmResponse>(
+    `/api/tasks/${taskId}/breakdown/confirm`,
+    body,
+  );
 }
 
 /** 成果物の全版を version 昇順で取得する（#10。末尾が最新）。 */

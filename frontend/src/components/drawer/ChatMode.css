@@ -1,0 +1,125 @@
+/* chat モード（§3.3.3 #12）: ヘッダ帯＋メッセージ領域＋コンポーザの縦 flex */
+.chat-mode {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* ヘッダ帯（背景 #f1edfb, 下線 #e7e0f7） */
+.chat-mode__band {
+  flex: none;
+  padding: 11px 18px;
+  background: var(--color-purple-bg);
+  border-bottom: 1px solid var(--color-chat-band-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* 「● 壁打ちチャット — 分解の意識合わせ」12px/600 #5d4eb0 */
+.chat-mode__band-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-purple);
+}
+
+/* 先頭ドット（#7a6ad0） */
+.chat-mode__band-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-purple-mid);
+}
+
+/* 「← 戻る」（白背景, #7a6ad0, 11px/600） */
+.chat-mode__back {
+  border: none;
+  background: var(--color-surface);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-purple-mid);
+  border-radius: var(--radius-badge-lg);
+  padding: 5px 9px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+/* メッセージ領域（flex:1, scroll, gap14px） */
+.chat-mode__messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+}
+
+/* メッセージ行（msgin） */
+.chat-mode__item {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  animation: var(--anim-msgin);
+}
+
+/* アバター（24×24, radius7px）: ai=パープル #5d4eb0 "AI" / human=アンバー "YK" */
+.chat-mode__avatar {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  font-size: 9px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-mode__avatar--ai {
+  background: var(--color-purple);
+  color: #fff;
+}
+
+.chat-mode__avatar--human {
+  background: var(--color-amber-bg);
+  color: var(--color-amber-text);
+}
+
+.chat-mode__body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+/* 名義「{Grow | あなた}」10.5px/600 #8a909a */
+.chat-mode__name {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--color-text-weak);
+}
+
+/* 本文バブル（背景 #f6f4fc, radius9px, 12.5px, pre-wrap） */
+.chat-mode__bubble {
+  font-size: 12.5px;
+  color: var(--color-text-body);
+  line-height: 1.65;
+  background: var(--color-chat-bubble-bg);
+  border-radius: 9px;
+  padding: 9px 11px;
+  white-space: pre-wrap;
+}
+
+/* 送信失敗の簡易エラー（§5.4 ロールバック時） */
+.chat-mode__error {
+  font-size: 11.5px;
+  color: var(--color-amber-text2);
+  background: var(--color-amber-bg2);
+  border-radius: 7px;
+  padding: 8px 10px;
+}
