@@ -20,10 +20,12 @@ interface FetchStubOptions {
   comments?: Comment[] | (() => unknown);
   /** POST /api/tasks/:id/comments の応答（省略時は 201 でサーバ確定版を返す） */
   post?: (body: { author: string; text: string }) => unknown;
+  /** POST /api/tasks/:id/assign-ai の応答（省略時は 202 {jobId}） */
+  assignAi?: () => unknown;
 }
 
-/** コメント API だけを受ける fetch スタブを差し込む */
-function installFetch({ comments = [], post }: FetchStubOptions = {}) {
+/** ドロワーが叩く API（コメント・成果物・assign-ai）を受ける fetch スタブを差し込む */
+function installFetch({ comments = [], post, assignAi }: FetchStubOptions = {}) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? 'GET';
@@ -39,6 +41,15 @@ function installFetch({ comments = [], post }: FetchStubOptions = {}) {
         201,
         makeComment({ id: 'c-server-1', author: 'human', text: body.text }),
       );
+    }
+    if (method === 'GET' && url.endsWith('/artifacts')) {
+      // #10: ドロワーを開くと loadArtifacts が呼ぶ（既定は成果物なし）
+      const taskId = url.split('/').at(-2) ?? '';
+      return jsonResponse(200, { taskId, artifacts: [] });
+    }
+    if (method === 'POST' && url.endsWith('/assign-ai')) {
+      if (assignAi) return assignAi();
+      return jsonResponse(202, { jobId: 'job-1' });
     }
     throw new Error(`unexpected fetch: ${method} ${url}`);
   });
@@ -312,5 +323,118 @@ describe('楽観的更新とロールバック（§5.4）', () => {
     expect(screen.queryByText('失敗するコメント')).toBeNull();
     expect(useBoardStore.getState().comments['T-098']).toHaveLength(0);
     expect(useBoardStore.getState().cards['T-098'].commentCount).toBe(0);
+  });
+});
+
+describe('assignAi 結線と活性制御（#10: §5.3 / Grow.dc.html）', () => {
+  it('「AIにまかせる」で POST /api/tasks/:id/assign-ai を呼ぶ', async () => {
+    const fetchMock = installFetch();
+    useBoardStore.getState().select('T-104'); // spec → ai_work は許可遷移
+    render(<Drawer />);
+    await waitForLoaded('T-104');
+
+    fireEvent.click(screen.getByRole('button', { name: 'AIにまかせる' }));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/tasks/T-104/assign-ai',
+        expect.objectContaining({ method: 'POST' }),
+      ),
+    );
+    // 202 後はローカルで状態を変えない（SSE 反映待ち）
+    expect(useBoardStore.getState().cards['T-104'].status).toBe('spec');
+  });
+
+  it('ai_work のカードでは「AIにまかせる」が無効', async () => {
+    installFetch();
+    useBoardStore.getState().select('T-098'); // ai_work
+    render(<Drawer />);
+
+    expect(screen.getByRole('button', { name: 'AIにまかせる' })).toBeDisabled();
+    await waitForLoaded('T-098');
+  });
+
+  it('done のカードでは「AIにまかせる」が無効', async () => {
+    installFetch();
+    useBoardStore.getState().select('T-080'); // done
+    render(<Drawer />);
+
+    expect(screen.getByRole('button', { name: 'AIにまかせる' })).toBeDisabled();
+    await waitForLoaded('T-080');
+  });
+
+  it('assign-ai の 409 で boardError を設定する', async () => {
+    installFetch({ assignAi: () => jsonResponse(409, {}) });
+    useBoardStore.getState().select('T-104');
+    render(<Drawer />);
+    await waitForLoaded('T-104');
+
+    fireEvent.click(screen.getByRole('button', { name: 'AIにまかせる' }));
+
+    await waitFor(() =>
+      expect(useBoardStore.getState().boardError).toBe('AIにまかせられませんでした'),
+    );
+  });
+});
+
+describe('適用ルール・成果物セクションの組み込み（#10: §3.3.2 b / c-2）', () => {
+  it('該当ルールがあるカードで適用ルールセクションを表示する（アクションバー直下）', async () => {
+    installFetch();
+    useBoardStore.getState().select('T-104'); // 仕事,調査 → 4件
+    const { container } = render(<Drawer />);
+
+    expect(screen.getByText('◈ AIが着手時に前提にするルール')).toBeInTheDocument();
+    // 配置: アクションバーの直後（§3.3.2 (b) の位置）
+    const detail = container.querySelector('.drawer__detail');
+    expect(detail?.children[0]).toHaveClass('action-bar');
+    expect(detail?.children[1]).toHaveClass('applied-rules');
+    await waitForLoaded('T-104');
+  });
+
+  it('retrieval 0件なら適用ルールセクションを出さない（§5.5）', async () => {
+    useBoardStore.setState({ rules: [] });
+    installFetch();
+    useBoardStore.getState().select('T-104');
+    render(<Drawer />);
+
+    expect(screen.queryByText('◈ AIが着手時に前提にするルール')).toBeNull();
+    await waitForLoaded('T-104');
+  });
+
+  it('ドロワーを開くと GET /tasks/:id/artifacts で成果物を読み込み、あれば表示する', async () => {
+    const artifact = {
+      id: 'a-1',
+      taskId: 'T-091',
+      version: 1,
+      contentMd: '# 確定申告サマリー',
+      createdAt: AT,
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      if (method === 'GET' && url.endsWith('/comments')) return jsonResponse(200, []);
+      if (method === 'GET' && url.endsWith('/artifacts')) {
+        return jsonResponse(200, { taskId: 'T-091', artifacts: [artifact] });
+      }
+      throw new Error(`unexpected fetch: ${method} ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    useBoardStore.getState().select('T-091');
+    render(<Drawer />);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/tasks/T-091/artifacts', undefined);
+    expect(await screen.findByText('成果物（レポート）')).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { name: '確定申告サマリー' }),
+    ).toBeInTheDocument();
+  });
+
+  it('成果物が無ければ成果物セクションを出さない（§3.3.2 c-2）', async () => {
+    installFetch();
+    useBoardStore.getState().select('T-104');
+    render(<Drawer />);
+    await waitForLoaded('T-104');
+
+    expect(screen.queryByText('成果物（レポート）')).toBeNull();
   });
 });

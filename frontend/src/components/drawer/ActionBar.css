@@ -20,6 +20,12 @@
   font-family: inherit;
 }
 
+/* #10: 無効時（status が ai_work / done・送信中）は薄く表示 */
+.action-bar__button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 /* 「AIにまかせる」= プライマリ（白文字, ティール, 先頭ドット6px #bff0ea） */
 .action-bar__button--assign {
   color: #fff;

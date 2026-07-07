@@ -1,12 +1,15 @@
 // fetch ラッパ。API コントラクトは types/api.ts（backend/app/domain/dto.py と鏡写し）。
 
 import type {
+  ArtifactCreate,
+  ArtifactResponse,
+  AssignAiResponse,
   BoardResponse,
   CommentCreate,
   TaskCreate,
   TaskPatch,
 } from '../types/api.ts';
-import type { Comment, Task } from '../types/domain.ts';
+import type { Artifact, Comment, Task } from '../types/domain.ts';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -66,4 +69,21 @@ export function getComments(taskId: string): Promise<Comment[]> {
 /** コメントを投稿する（#7 コンポーザ）。作成された Comment を返す。 */
 export function createComment(taskId: string, body: CommentCreate): Promise<Comment> {
   return postJson<Comment>(`/api/tasks/${taskId}/comments`, body);
+}
+
+/** 「AIにまかせる」を起動する（#10 assignAI）。202 {jobId}。不正遷移は 409。 */
+export function assignAi(taskId: string): Promise<AssignAiResponse> {
+  return request<AssignAiResponse>(`/api/tasks/${taskId}/assign-ai`, {
+    method: 'POST',
+  });
+}
+
+/** 成果物の全版を version 昇順で取得する（#10。末尾が最新）。 */
+export function getArtifacts(taskId: string): Promise<ArtifactResponse> {
+  return request<ArtifactResponse>(`/api/tasks/${taskId}/artifacts`);
+}
+
+/** 人の編集を新版として保存する（#10 §00 #12）。作成された Artifact（201）を返す。 */
+export function createArtifact(taskId: string, body: ArtifactCreate): Promise<Artifact> {
+  return postJson<Artifact>(`/api/tasks/${taskId}/artifacts`, body);
 }

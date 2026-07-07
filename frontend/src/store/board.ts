@@ -3,7 +3,15 @@
 // 派生値（§5.1）は保存せず、render のたびに derive* で計算する。
 
 import { create } from 'zustand';
-import { createComment, createTask, getComments, patchTask } from '../lib/api.ts';
+import {
+  assignAi as assignAiRequest,
+  createArtifact,
+  createComment,
+  createTask,
+  getArtifacts,
+  getComments,
+  patchTask,
+} from '../lib/api.ts';
 import { canTransition } from '../lib/stateMachine.ts';
 import type {
   BoardResponse,
@@ -41,8 +49,9 @@ export interface BoardState {
   // §3.3.3/§5.3 の通り 担当(owner)＋名称(title) を持つ SubtaskProposal（§7.4b）が実体。
   proposal: Record<string, SubtaskProposal[]>;
   learn: Record<string, RuleProposal[]>; // 蒸留候補（taskId -> ）
-  artifacts: Record<string, Artifact[]>; // taskId -> 成果物の版（§00 #2）
+  artifacts: Record<string, Artifact[]>; // taskId -> 成果物の版（§00 #2。version 昇順・末尾が最新）
   drafts: Record<string, string>; // コンポーザ入力
+  assigning: Record<string, boolean>; // taskId -> assign-ai 送信中（ボタン無効化, #10）
 }
 
 export interface BoardActions {
@@ -86,11 +95,27 @@ export interface BoardActions {
   /** §5.3 markDone: PATCH {status:'done', laneKey:'done', progress:null} → 反映 */
   markDone: (taskId: string) => Promise<void>;
 
-  // ---- SSE 適用（#7 / src/lib/sse.ts から呼ばれる） ----
+  // ---- AI 実作業（#10） ----
+  /**
+   * §5.3 assignAI: POST /tasks/:id/assign-ai。202 後の反映（ai_work 化・着手コメント・
+   * 進捗・完了ハンドオフ）はすべて SSE に任せる（§5.4 サーバ起点）。
+   * 送信中は assigning フラグでボタンを無効化し、409/失敗は boardError。
+   */
+  assignAi: (taskId: string) => Promise<void>;
+
+  // ---- 成果物（#10 / §00 #2） ----
+  /** GET /tasks/:id/artifacts で全版を読み込む（ドロワーを開いたとき）。失敗は非表示のまま */
+  loadArtifacts: (taskId: string) => Promise<void>;
+  /** POST /tasks/:id/artifacts で編集内容を新版として保存する。成功で true */
+  saveArtifact: (taskId: string, contentMd: string) => Promise<boolean>;
+
+  // ---- SSE 適用（#7 / #10 / src/lib/sse.ts から呼ばれる） ----
   /** task.updated: カードを差し替え、レーン移動も反映（全レーンから除去→laneKey へ挿入） */
   applyTaskUpdated: (task: Task) => void;
   /** comment.created: 読込済みスレッドへ追記（自分の楽観的追加との重複は id で排除） */
   applyCommentCreated: (comment: Comment) => void;
+  /** artifact.created: version 昇順を保って追記（POST 応答との重複は id で排除） */
+  applyArtifactCreated: (artifact: Artifact) => void;
 }
 
 export type BoardStore = BoardState & BoardActions;
@@ -112,6 +137,7 @@ export function createInitialBoardState(): BoardState {
     learn: {},
     artifacts: {},
     drafts: {},
+    assigning: {},
   };
 }
 
@@ -329,7 +355,50 @@ export const useBoardStore = create<BoardStore>()((set, get) => ({
     }
   },
 
-  // ---- SSE 適用（#7） ----
+  // ---- AI 実作業（#10） ----
+  assignAi: async (taskId) => {
+    const s = get();
+    if (s.assigning[taskId] === true) return; // 二重送信防止（送信中はボタンも無効）
+    if (s.cards[taskId] === undefined) return;
+    set((st) => ({
+      assigning: { ...st.assigning, [taskId]: true },
+      boardError: null,
+    }));
+    try {
+      // 202 {jobId}。以降の進行（ai_work/progress 0→45→you_review・コメント・成果物）は
+      // すべてサーバ起点の SSE（task.updated / comment.created / artifact.created）が反映する
+      await assignAiRequest(taskId);
+    } catch {
+      // 不正遷移（409）や通信失敗（§5.4 / §00 #10）
+      set({ boardError: 'AIにまかせられませんでした' });
+    } finally {
+      set((st) => ({ assigning: { ...st.assigning, [taskId]: false } }));
+    }
+  },
+
+  // ---- 成果物（#10 / §00 #2） ----
+  loadArtifacts: async (taskId) => {
+    try {
+      const res = await getArtifacts(taskId);
+      // サーバは version 昇順で返す（末尾が最新）。全版で置き換える
+      set((s) => ({ artifacts: { ...s.artifacts, [taskId]: res.artifacts } }));
+    } catch {
+      // 取得失敗はセクション非表示のまま（§5.5: 成果物なしと同じ扱い。文言は出さない）
+    }
+  },
+  saveArtifact: async (taskId, contentMd) => {
+    set({ boardError: null });
+    try {
+      const created = await createArtifact(taskId, { contentMd });
+      get().applyArtifactCreated(created); // SSE 先着なら id で重複排除される
+      return true;
+    } catch {
+      set({ boardError: '成果物の保存に失敗しました' });
+      return false;
+    }
+  },
+
+  // ---- SSE 適用（#7 / #10） ----
   applyTaskUpdated: (task) =>
     set((s) => {
       const lanes = s.lanes.map((lane) => {
@@ -363,6 +432,15 @@ export const useBoardStore = create<BoardStore>()((set, get) => ({
           ? list.map((c, i) => (i === pendingIndex ? comment : c))
           : [...list, comment];
       return { comments: { ...s.comments, [comment.taskId]: next } };
+    }),
+  applyArtifactCreated: (artifact) =>
+    set((s) => {
+      const list = s.artifacts[artifact.taskId] ?? [];
+      // id 重複排除（自分の POST 応答と SSE の二重適用を防ぐ）
+      if (list.some((a) => a.id === artifact.id)) return {};
+      // version 昇順（末尾が最新）を維持して追記
+      const next = [...list, artifact].sort((a, b) => a.version - b.version);
+      return { artifacts: { ...s.artifacts, [artifact.taskId]: next } };
     }),
 }));
 

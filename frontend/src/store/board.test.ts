@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { boardFixture } from '../test/boardFixture.ts';
-import type { Comment, LaneKey, Task } from '../types/domain.ts';
+import type { Artifact, Comment, LaneKey, Task } from '../types/domain.ts';
 import {
   ADD_CARD_AI_PROMPT,
   createInitialBoardState,
@@ -451,5 +451,162 @@ describe('markDone（#8: §5.3）', () => {
     expect(s.cards).toEqual(before.cards);
     expect(s.lanes).toEqual(before.lanes);
     expect(s.boardError).toBe('完了にできませんでした');
+  });
+});
+
+// ---- AI 実作業（#10: §5.3 assignAI / §5.4 サーバ起点） ----
+
+describe('assignAi（#10: §5.3）', () => {
+  beforeEach(() => {
+    useBoardStore.setState({ ...createInitialBoardState(), ...boardFixture() });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('POST /api/tasks/:id/assign-ai を呼び、202 後はローカル状態を変えない（SSE に任せる）', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(202, { jobId: 'job-1' }));
+    vi.stubGlobal('fetch', fetchMock);
+    const before = useBoardStore.getState();
+
+    await useBoardStore.getState().assignAi('T-104');
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/tasks/T-104/assign-ai',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    const s = useBoardStore.getState();
+    // 楽観的更新しない: ai_work 化・レーン移動・コメントは task.updated / comment.created が届いて反映される
+    expect(s.cards['T-104'].status).toBe('spec');
+    expect(s.lanes).toEqual(before.lanes);
+    expect(s.assigning['T-104']).toBe(false); // 完了後フラグ解除
+    expect(s.boardError).toBeNull();
+  });
+
+  it('送信中は assigning フラグが立ち、二重送信しない', async () => {
+    let resolvePost!: (value: unknown) => void;
+    const fetchMock = vi.fn(
+      (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Promise((resolve) => (resolvePost = resolve)),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const first = useBoardStore.getState().assignAi('T-104');
+    expect(useBoardStore.getState().assigning['T-104']).toBe(true);
+
+    const second = useBoardStore.getState().assignAi('T-104'); // 送信中の再呼び出しは no-op
+    resolvePost(jsonResponse(202, { jobId: 'job-1' }));
+    await Promise.all([first, second]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(useBoardStore.getState().assigning['T-104']).toBe(false);
+  });
+
+  it('409（不正遷移）で boardError を設定する', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(409, {})));
+
+    await useBoardStore.getState().assignAi('T-098'); // ai_work → ai_work は 409
+
+    const s = useBoardStore.getState();
+    expect(s.boardError).toBe('AIにまかせられませんでした');
+    expect(s.assigning['T-098']).toBe(false);
+  });
+
+  it('存在しないカードは API を呼ばない', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    await useBoardStore.getState().assignAi('T-999');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+// ---- 成果物（#10: §00 #2 / §3.3.2 c-2） ----
+
+const ARTIFACT_AT = '2026-07-07T01:00:00Z';
+
+function makeArtifact(
+  partial: Partial<Artifact> & Pick<Artifact, 'id' | 'version'>,
+): Artifact {
+  return {
+    taskId: 'T-091',
+    contentMd: `# レポート v${partial.version}`,
+    createdAt: ARTIFACT_AT,
+    ...partial,
+  };
+}
+
+describe('artifacts（#10）', () => {
+  beforeEach(() => {
+    useBoardStore.setState({ ...createInitialBoardState(), ...boardFixture() });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('loadArtifacts が GET 結果（version 昇順・末尾が最新）を反映する', async () => {
+    const list = [makeArtifact({ id: 'a-1', version: 1 }), makeArtifact({ id: 'a-2', version: 2 })];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse(200, { taskId: 'T-091', artifacts: list })),
+    );
+
+    await useBoardStore.getState().loadArtifacts('T-091');
+
+    expect(fetch).toHaveBeenCalledWith('/api/tasks/T-091/artifacts', undefined);
+    expect(useBoardStore.getState().artifacts['T-091']).toEqual(list);
+  });
+
+  it('loadArtifacts 失敗は静かに無視する（§5.5: セクション非表示のまま）', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(500, {})));
+    await useBoardStore.getState().loadArtifacts('T-091');
+    const s = useBoardStore.getState();
+    expect(s.artifacts['T-091']).toBeUndefined();
+    expect(s.boardError).toBeNull();
+  });
+
+  it('applyArtifactCreated は version 昇順を保って追記し、id 重複を排除する', () => {
+    const v2 = makeArtifact({ id: 'a-2', version: 2 });
+    const v1 = makeArtifact({ id: 'a-1', version: 1 });
+    const { applyArtifactCreated } = useBoardStore.getState();
+
+    applyArtifactCreated(v2);
+    applyArtifactCreated(v1); // 逆順で届いても昇順に整列
+    expect(useBoardStore.getState().artifacts['T-091']).toEqual([v1, v2]);
+
+    applyArtifactCreated(v2); // id 重複（POST 応答と SSE の二重適用）は無視
+    expect(useBoardStore.getState().artifacts['T-091']).toEqual([v1, v2]);
+  });
+
+  it('saveArtifact が POST {contentMd} を送り、201 応答を反映して true を返す', async () => {
+    const created = makeArtifact({ id: 'a-3', version: 3, contentMd: '# 編集版' });
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        jsonResponse(201, created),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const ok = await useBoardStore.getState().saveArtifact('T-091', '# 編集版');
+
+    expect(ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/tasks/T-091/artifacts',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      contentMd: '# 編集版',
+    });
+    expect(useBoardStore.getState().artifacts['T-091']).toEqual([created]);
+  });
+
+  it('saveArtifact 失敗で boardError を設定し false を返す', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(500, {})));
+
+    const ok = await useBoardStore.getState().saveArtifact('T-091', '# 編集版');
+
+    expect(ok).toBe(false);
+    expect(useBoardStore.getState().boardError).toBe('成果物の保存に失敗しました');
+    expect(useBoardStore.getState().artifacts['T-091']).toBeUndefined();
   });
 });

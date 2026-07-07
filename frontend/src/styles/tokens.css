@@ -79,9 +79,10 @@
 
   /* ---- §3.3 ドロワー（Grow.dc.html 抽出の確定値 — #7） ---- */
   --color-drawer-border: #e2e6ec; /* ドロワー左枠 */
-  --color-surface-soft: #fafbfc; /* コンポーザ背景・行 hover */
+  --color-surface-soft: #fafbfc; /* コンポーザ背景・行 hover・成果物プレビュー背景 */
   --color-bubble-bg: #f6f8fa; /* アクティビティ本文バブル背景 */
   --color-assign-dot: #bff0ea; /* 「AIにまかせる」先頭ドット */
+  --color-applied-rules-bg: #fbfbfe; /* 適用ルールセクション背景（§3.3.2b — #10） */
 
   /* ---- §4.2 タイポグラフィ ---- */
   --font-ui: 'IBM Plex Sans JP', sans-serif;

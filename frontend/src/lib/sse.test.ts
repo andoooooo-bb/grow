@@ -1,8 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createInitialBoardState, useBoardStore } from '../store/board.ts';
 import { boardFixture } from '../test/boardFixture.ts';
-import type { Comment, Task } from '../types/domain.ts';
-import { COMMENT_CREATED, EVENTS_URL, TASK_UPDATED, connectEvents } from './sse.ts';
+import type { Artifact, Comment, Task } from '../types/domain.ts';
+import {
+  ARTIFACT_CREATED,
+  COMMENT_CREATED,
+  EVENTS_URL,
+  TASK_UPDATED,
+  connectEvents,
+} from './sse.ts';
 
 type Listener = (e: MessageEvent) => void;
 
@@ -132,5 +138,28 @@ describe('connectEvents（§5.4 / #7）', () => {
     connectEvents();
     lastSource().emit(COMMENT_CREATED, makeComment({ id: 'c-1', text: '着手します' }));
     expect(useBoardStore.getState().comments['T-104']).toBeUndefined();
+  });
+
+  it('artifact.created で成果物を store へ反映する（#10。version 昇順・id 重複排除）', () => {
+    connectEvents();
+    const v1: Artifact = {
+      id: 'a-1',
+      taskId: 'T-104',
+      version: 1,
+      contentMd: '# 競合調査レポート',
+      createdAt: AT,
+    };
+
+    lastSource().emit(ARTIFACT_CREATED, v1);
+    expect(useBoardStore.getState().artifacts['T-104']).toEqual([v1]);
+
+    // 同一 id の再送（POST 応答との二重適用）は無視される
+    lastSource().emit(ARTIFACT_CREATED, v1);
+    expect(useBoardStore.getState().artifacts['T-104']).toHaveLength(1);
+
+    // 新版は末尾（最新）に積まれる
+    const v2: Artifact = { ...v1, id: 'a-2', version: 2, contentMd: '# 改訂版' };
+    lastSource().emit(ARTIFACT_CREATED, v2);
+    expect(useBoardStore.getState().artifacts['T-104']).toEqual([v1, v2]);
   });
 });

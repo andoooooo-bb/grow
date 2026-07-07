@@ -68,6 +68,17 @@ export interface ArtifactResponse {
   artifacts: Artifact[];
 }
 
+// POST /tasks/:id/artifacts（人の編集を新版として保存, #10 §00 #12）
+export interface ArtifactCreate {
+  contentMd: string;
+}
+
+// ---- AIジョブ（§7.2） ----
+// POST /tasks/:id/assign-ai の応答（202: enqueue したジョブの ID）
+export interface AssignAiResponse {
+  jobId: string;
+}
+
 // ---- ルール（ナレッジ） ----
 // POST /rules（蒸留候補の採用等）
 export interface RuleCreate {
