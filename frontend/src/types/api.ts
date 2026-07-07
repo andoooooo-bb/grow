@@ -1,0 +1,107 @@
+// API コントラクト（DTO）。backend/app/domain/dto.py と鏡写し。
+// §2.3 の正規化ストア形（cards: id辞書 / lanes: cardIds 配列で順序保持）に忠実。
+
+import type {
+  Artifact,
+  Author,
+  Confidence,
+  LaneKey,
+  Owner,
+  Rule,
+  RuleScope,
+  Task,
+  TaskStatus,
+} from './domain.ts';
+
+// ---- ボード取得 ----
+export interface LaneDto {
+  key: LaneKey;
+  name: string; // backlog=バックログ, todo=ToDo, progress=進行中, review=レビュー, done=完了
+  cardIds: string[]; // 並び順を保持
+}
+
+export interface BoardResponse {
+  lanes: LaneDto[];
+  cards: Record<string, Task>; // id -> Task（サブタスク含む全カード）
+  rules: Rule[];
+}
+
+// ---- タスク ----
+// PATCH /tasks/:id（部分更新。指定フィールドのみ変更）
+export interface TaskPatch {
+  laneKey?: LaneKey;
+  orderInLane?: number;
+  title?: string;
+  status?: TaskStatus;
+  labels?: string[];
+  progress?: number | null; // null で明示クリア（ai_work 以外は null が不変条件）
+  parentId?: string | null;
+}
+
+// POST /boards/:id/tasks
+export interface TaskCreate {
+  laneKey: LaneKey;
+  title: string;
+  status?: TaskStatus; // 省略時 'breakdown'（§5.3 addCard）
+  labels?: string[];
+  parentId?: string | null;
+}
+
+// ---- コメント / 壁打ちチャット ----
+// POST /tasks/:id/comments
+export interface CommentCreate {
+  author: Author;
+  authorUserId?: string; // human のとき
+  text: string;
+}
+
+// POST /tasks/:id/chat
+export interface ChatMessageCreate {
+  author: Author;
+  text: string;
+}
+
+// ---- 成果物 ----
+// GET /tasks/:id/artifacts（版の一覧。最大 version が最新）
+export interface ArtifactResponse {
+  taskId: string;
+  artifacts: Artifact[];
+}
+
+// ---- ルール（ナレッジ） ----
+// POST /rules（蒸留候補の採用等）
+export interface RuleCreate {
+  scope: RuleScope;
+  ownerUserId?: string; // personal のとき
+  text: string;
+  tags: string[];
+  source: string;
+  sourceTaskId?: string | null;
+  confidence: Confidence;
+}
+
+// PATCH /rules/:id（例: promoteRule は {scope:'team'}）
+export interface RulePatch {
+  scope?: RuleScope;
+  text?: string;
+  tags?: string[];
+  confidence?: Confidence;
+}
+
+// ---- AI 構造化出力（§7.4b / §7.5） ----
+// propose_subtasks の1項目（分解候補）
+export interface SubtaskProposal {
+  title: string;
+  owner: Owner; // AIが実行可能なら ai、人の判断/作業が必須なら human
+  rationale?: string;
+}
+
+// propose_rules の1項目（蒸留候補）。永続化時は tempId/taskId を付与（§2.2 RuleProposal）
+export interface RuleProposalDto {
+  tempId: string;
+  taskId: string;
+  text: string;
+  scope: RuleScope;
+  tags: string[];
+  confidence: Confidence;
+}
