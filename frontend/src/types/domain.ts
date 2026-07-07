@@ -59,6 +59,9 @@ export interface Task {
   progress?: number; // 0..100（AI作業中のみ）
   parentId?: string | null; // サブタスクなら親のid
   childIds?: string[]; // 親なら子のid配列（進捗巻き上げ表示に使用）
+  // コメント件数（§3.2 カード右上の表示用）。backend が comments を集計して返す派生値。
+  // コメント作成時は task.updated イベントでも配信され件数が同期される（#7）。
+  commentCount: number;
   createdAt: string;
   updatedAt: string;
 }

@@ -26,6 +26,7 @@ interface SeedTask {
   status: TaskStatus;
   labels: string[];
   progress?: number;
+  commentCount?: number;
 }
 
 function toTask(seed: SeedTask): Task {
@@ -33,6 +34,7 @@ function toTask(seed: SeedTask): Task {
     workspaceId: WORKSPACE_ID,
     boardId: BOARD_ID,
     ownerUserId: OWNER_USER_ID,
+    commentCount: 0, // シードにコメントは無い（#7）。seed 側で上書き可
     createdAt: AT,
     updatedAt: AT,
     ...seed,

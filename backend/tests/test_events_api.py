@@ -65,6 +65,12 @@ async def test_comment_mutation_publishes_comment_created(api_client):
         assert event["type"] == "comment.created"
         assert event["payload"]["taskId"] == "T-104"
         assert event["payload"]["text"] == "着手します"
+
+        # #7: コメント件数（commentCount）同期のため task.updated も続けて発火する
+        event = queue.get_nowait()
+        assert event["type"] == "task.updated"
+        assert event["payload"]["id"] == "T-104"
+        assert event["payload"]["commentCount"] == 1
     finally:
         bus.unsubscribe(queue)
 

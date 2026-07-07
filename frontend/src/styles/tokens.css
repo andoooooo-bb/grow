@@ -77,6 +77,12 @@
   --color-pill-ai-bg: rgba(15, 148, 136, 0.18);
   --color-pill-knowledge-bg: rgba(93, 78, 176, 0.24);
 
+  /* ---- §3.3 ドロワー（Grow.dc.html 抽出の確定値 — #7） ---- */
+  --color-drawer-border: #e2e6ec; /* ドロワー左枠 */
+  --color-surface-soft: #fafbfc; /* コンポーザ背景・行 hover */
+  --color-bubble-bg: #f6f8fa; /* アクティビティ本文バブル背景 */
+  --color-assign-dot: #bff0ea; /* 「AIにまかせる」先頭ドット */
+
   /* ---- §4.2 タイポグラフィ ---- */
   --font-ui: 'IBM Plex Sans JP', sans-serif;
   --font-mono: 'JetBrains Mono', monospace;

@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException
 from app.db import get_pool
 from app.domain.dto import CommentCreate
 from app.domain.models import Comment
-from app.events import COMMENT_CREATED, publish_event
+from app.events import COMMENT_CREATED, TASK_UPDATED, publish_event
 from app.repo import comments as comments_repo
 from app.repo import tasks as tasks_repo
 
@@ -28,7 +28,11 @@ async def create_comment(human_id: str, payload: CommentCreate) -> Comment:
             raise HTTPException(
                 status_code=422, detail=f"author_user_id が存在しません: {payload.author_user_id}"
             ) from exc
+        # commentCount を含む最新の Task を導出（挿入後なので件数は加算済み）
+        task = await tasks_repo.task_from_row(conn, task_row)
     publish_event(COMMENT_CREATED, comment.model_dump(mode="json", by_alias=True))
+    # コメント件数の同期（#7）: カードの commentCount を task.updated でも配信する
+    publish_event(TASK_UPDATED, task.model_dump(mode="json", by_alias=True))
     return comment
 
 

@@ -26,6 +26,7 @@ def _row_to_task(
     *,
     parent_human_id: str | None = None,
     child_human_ids: list[str] | None = None,
+    comment_count: int = 0,
 ) -> Task:
     return Task(
         id=row["human_id"],
@@ -40,6 +41,7 @@ def _row_to_task(
         progress=row["progress"],
         parent_id=parent_human_id,
         child_ids=child_human_ids if child_human_ids else None,
+        comment_count=comment_count,
         created_at=_iso(row["created_at"]),
         updated_at=_iso(row["updated_at"]),
     )
@@ -70,6 +72,19 @@ async def fetch_board(conn: asyncpg.Connection) -> BoardResponse:
         if row["parent_id"] is not None:
             children_by_parent.setdefault(row["parent_id"], []).append(row["human_id"])
 
+    # コメント件数の集計（§3.2 カード右上 / #7）。タスクUUID -> 件数。
+    count_rows = await conn.fetch(
+        """
+        select c.task_id, count(*)::int as comment_count
+        from comments c
+        join tasks t on t.id = c.task_id
+        where t.board_id = $1
+        group by c.task_id
+        """,
+        board["id"],
+    )
+    comment_counts = {row["task_id"]: row["comment_count"] for row in count_rows}
+
     cards: dict[str, Task] = {}
     lane_card_ids: dict[str, list[str]] = {row["key"]: [] for row in lane_rows}
     for row in task_rows:
@@ -77,6 +92,7 @@ async def fetch_board(conn: asyncpg.Connection) -> BoardResponse:
             row,
             parent_human_id=human_by_uuid.get(row["parent_id"]),
             child_human_ids=children_by_parent.get(row["id"]),
+            comment_count=comment_counts.get(row["id"], 0),
         )
         cards[task.id] = task
         lane_card_ids.setdefault(row["lane_key"], []).append(task.id)
@@ -146,10 +162,14 @@ async def task_from_row(conn: asyncpg.Connection, row: asyncpg.Record) -> Task:
         "select human_id from tasks where parent_id = $1 order by created_at, human_id",
         row["id"],
     )
+    comment_count = await conn.fetchval(
+        "select count(*)::int from comments where task_id = $1", row["id"]
+    )
     return _row_to_task(
         row,
         parent_human_id=parent_human_id,
         child_human_ids=[r["human_id"] for r in child_rows],
+        comment_count=comment_count,
     )
 
 

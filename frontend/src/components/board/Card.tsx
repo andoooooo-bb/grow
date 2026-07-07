@@ -1,5 +1,5 @@
 // カード（§3.2）。owner/tone/label は STATUS_META から導出（§5.1）。
-// クリックで select(id)（ドロワー本体は #7、DnD は #8 で実装）。
+// クリックで select(id) → 詳細ドロワーが開く（#7）。DnD は #8 で実装。
 
 import type { Task } from '../../types/domain.ts';
 import { STATUS_META } from '../../types/domain.ts';
@@ -32,9 +32,6 @@ export function Card({ task }: CardProps) {
   const meta = STATUS_META[task.status];
   // 左色バー（§3.2）: done は owner に関わらず緑。未完了は owner で色分け。
   const barTone = task.status === 'done' ? 'done' : meta.owner;
-  // TODO(後続Issue): BoardResponse の cards が commentCount を返すようになったら置き換える。
-  // 現状の Task にはコメント数が無いため 0 のプレースホルダを表示する。
-  const commentCount = (task as Task & { commentCount?: number }).commentCount ?? 0;
   const childTotal = task.childIds?.length ?? 0;
 
   return (
@@ -48,7 +45,7 @@ export function Card({ task }: CardProps) {
         </div>
         <span className="card__comments">
           <span className="card__comments-dot" aria-hidden="true" />
-          {commentCount}
+          {task.commentCount}
         </span>
       </div>
 

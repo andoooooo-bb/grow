@@ -1,0 +1,49 @@
+/* アクションバー（§3.3.2a）: padding 14px 18px, gap8px wrap, 下線 #f1f3f5 */
+.action-bar {
+  flex: none;
+  padding: 14px 18px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--color-divider);
+}
+
+.action-bar__button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: var(--radius-button);
+  padding: 9px 13px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+/* 「AIにまかせる」= プライマリ（白文字, ティール, 先頭ドット6px #bff0ea） */
+.action-bar__button--assign {
+  color: #fff;
+  background: var(--color-teal);
+  border: none;
+}
+
+.action-bar__assign-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-assign-dot);
+}
+
+/* 「AIと壁打ち / 分解」= セカンダリ（パープル） */
+.action-bar__button--chat {
+  color: var(--color-purple);
+  background: var(--color-purple-bg);
+  border: 1px solid var(--color-purple-border);
+}
+
+/* 「完了にする」（グリーン） */
+.action-bar__button--done {
+  color: var(--color-green-text);
+  background: var(--color-green-bg);
+  border: 1px solid var(--color-green-border);
+}

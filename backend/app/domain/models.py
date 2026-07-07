@@ -118,6 +118,9 @@ class Task(CamelModel):
     progress: int | None = None  # 0..100（AI作業中のみ）
     parent_id: str | None = None  # サブタスクなら親のid
     child_ids: list[str] | None = None  # 親なら子のid配列（進捗巻き上げ表示）
+    # コメント件数（§3.2 カード右上の表示用）。repo が comments を集計して詰める派生値。
+    # コメント作成時は task.updated イベントでも配信され、クライアントの件数が同期される（#7）。
+    comment_count: int = 0
     created_at: str
     updated_at: str
 

@@ -39,6 +39,7 @@ async def test_get_board_matches_seed(api_client):
     assert t098["progress"] == 60
     assert t098["labels"] == ["仕事", "調査"]
     assert t098["orderInLane"] == 0
+    assert t098["commentCount"] == 0  # シードにコメントは無い（#7）
 
     assert [rule["id"] for rule in body["rules"]] == ["K-01", "K-02", "K-03", "K-04", "K-05"]
     k01 = body["rules"][0]
@@ -190,6 +191,24 @@ async def test_comment_create_then_list(api_client):
     comments = res.json()
     assert [c["text"] for c in comments] == ["進捗はどうですか？"]
     assert comments[0]["id"] == created["id"]
+
+
+async def test_board_aggregates_comment_count(api_client):
+    """#7: fetch_board が各タスクの comments 件数を commentCount へ集計する。"""
+    for text in ["1件目", "2件目"]:
+        res = await api_client.post(
+            "/api/tasks/T-098/comments", json={"author": "human", "text": text}
+        )
+        assert res.status_code == 201
+    res = await api_client.post(
+        "/api/tasks/T-104/comments", json={"author": "ai", "text": "着手します"}
+    )
+    assert res.status_code == 201
+
+    board = (await api_client.get("/api/board")).json()
+    assert board["cards"]["T-098"]["commentCount"] == 2
+    assert board["cards"]["T-104"]["commentCount"] == 1
+    assert board["cards"]["T-130"]["commentCount"] == 0  # コメントの無いタスクは 0
 
 
 async def test_comment_on_unknown_task_is_404(api_client):

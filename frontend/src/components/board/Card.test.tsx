@@ -64,9 +64,14 @@ describe('Card: 上段・進捗・ラベル（§3.2）', () => {
     expect(screen.getByText('YK')).toBeInTheDocument();
   });
 
-  it('タスクIDとコメント数プレースホルダ（0）を表示する', () => {
-    render(<Card task={getTask('T-098')} />);
+  it('タスクIDとコメント数（commentCount 実数）を表示する（#7）', () => {
+    render(<Card task={{ ...getTask('T-098'), commentCount: 3 }} />);
     expect(screen.getByText('T-098')).toBeInTheDocument();
+    expect(screen.getByText('3')).toBeInTheDocument();
+  });
+
+  it('コメントが無いカードは 0 を表示する', () => {
+    render(<Card task={getTask('T-109')} />);
     expect(screen.getByText('0')).toBeInTheDocument();
   });
 

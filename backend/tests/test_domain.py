@@ -185,6 +185,7 @@ class TestDtoContracts:
             "ownerUserId": "u-1",
             "labels": ["仕事", "調査"],
             "progress": 60,
+            "commentCount": 0,  # #7 で追加（省略時デフォルト 0）
             "createdAt": "2026-07-07T00:00:00Z",
             "updatedAt": "2026-07-07T00:00:00Z",
         }
