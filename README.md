@@ -76,4 +76,4 @@ make build     # cd frontend && npm run build（SPA本番ビルド）
 
 ## デプロイ
 
-Cloud Run へのデプロイ手順・IaC は `infra/` を参照（Wave6 で追加予定）。コンテナは本リポジトリの `Dockerfile`（マルチステージ: frontend build → python:3.13-slim + uv）でビルドする。
+Cloud Run へのデプロイ手順・スクリプトは [`infra/README.md`](infra/README.md) を参照（実行順: 00_setup → 10_database → 20_migrate → 30_deploy）。デプロイ後の本番動作検証は [`infra/VERIFICATION.md`](infra/VERIFICATION.md)。

@@ -74,3 +74,35 @@ async def test_cloud_tasks_runner_enqueues_http_task(
     assert http["http_method"] == tasks_v2.HttpMethod.POST
     assert http["url"] == "https://grow.example.run.app/internal/jobs/run"
     assert json.loads(http["body"]) == {"jobId": "job-ct-1"}
+    # INTERNAL_JOBS_TOKEN 未設定時はトークンヘッダを付けない（ローカル互換, #16）
+    assert "X-Internal-Jobs-Token" not in http["headers"]
+
+
+async def test_cloud_tasks_runner_attaches_internal_jobs_token(
+    settings_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """cloud_tasks: INTERNAL_JOBS_TOKEN 設定時は X-Internal-Jobs-Token ヘッダを付与する（#16）。"""
+    from google.cloud import tasks_v2
+
+    settings_env(
+        JOB_RUNNER="cloud_tasks",
+        GCP_PROJECT="test-proj",
+        SELF_URL="https://grow.example.run.app",
+        INTERNAL_JOBS_TOKEN="token-abc",
+    )
+    created: list[dict] = []
+
+    class _FakeClient:
+        def queue_path(self, project: str, location: str, queue: str) -> str:
+            return f"projects/{project}/locations/{location}/queues/{queue}"
+
+        def create_task(self, request: dict) -> None:
+            created.append(request)
+
+    monkeypatch.setattr(tasks_v2, "CloudTasksClient", _FakeClient)
+
+    await jobs_queue.enqueue_job("job-ct-2")
+
+    assert len(created) == 1
+    headers = created[0]["task"]["http_request"]["headers"]
+    assert headers["X-Internal-Jobs-Token"] == "token-abc"

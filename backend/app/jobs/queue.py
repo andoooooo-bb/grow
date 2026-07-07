@@ -47,6 +47,11 @@ async def _enqueue_cloud_tasks(job_id: str) -> None:
     """
     settings = get_settings()
 
+    # INTERNAL_JOBS_TOKEN 設定時は worker 側（internal_jobs.py）が検証するヘッダを付与（#16）
+    headers = {"Content-Type": "application/json"}
+    if settings.internal_jobs_token:
+        headers["X-Internal-Jobs-Token"] = settings.internal_jobs_token
+
     def _create_task() -> None:
         from google.cloud import tasks_v2
 
@@ -61,7 +66,7 @@ async def _enqueue_cloud_tasks(job_id: str) -> None:
                     "http_request": {
                         "http_method": tasks_v2.HttpMethod.POST,
                         "url": f"{settings.self_url}/internal/jobs/run",
-                        "headers": {"Content-Type": "application/json"},
+                        "headers": headers,
                         "body": json.dumps({"jobId": job_id}).encode("utf-8"),
                     }
                 },

@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     # Cloud Tasks が worker エンドポイントへ push する際の自サービスURL
     self_url: str = "http://localhost:8000"
 
+    # /internal/jobs/run の保護トークン（#16）。本番は --allow-unauthenticated のため、
+    # 設定時のみ X-Internal-Jobs-Token ヘッダの一致を検証する（enqueue 側が同ヘッダを付与）。
+    # 未設定（既定・ローカル/テスト）は従来通り検証なしで素通し。
+    internal_jobs_token: str = ""
+
     # Cloud Run が注入する待受ポート（ローカル既定 8000 / Cloud Run 既定 8080）
     port: int = 8000
 

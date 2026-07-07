@@ -13,6 +13,8 @@ local ランナーは同エンドポイントを経由せず run_execute_job を
   行って 200 を返す（Cloud Tasks 側のキュー再試行上限と揃えること）。
 """
 
+import secrets
+
 from fastapi import APIRouter, HTTPException, Request
 
 from app.config import get_settings
@@ -28,6 +30,13 @@ CLOUD_TASKS_MAX_RETRY_COUNT = 3
 @router.post("/internal/jobs/run")
 async def run_job(payload: JobRunRequest, request: Request) -> dict[str, str]:
     settings = get_settings()
+    # INTERNAL_JOBS_TOKEN 設定時のみヘッダの一致を検証する（#16）。
+    # 本番は --allow-unauthenticated のため、enqueue 側（app/jobs/queue.py）が
+    # 付与する X-Internal-Jobs-Token で外部からの直接叩き込みを拒否する。
+    if settings.internal_jobs_token and not secrets.compare_digest(
+        request.headers.get("X-Internal-Jobs-Token", ""), settings.internal_jobs_token
+    ):
+        raise HTTPException(status_code=403, detail="invalid internal jobs token")
     try:
         if settings.job_runner == "cloud_tasks":
             retry_count = int(request.headers.get("X-CloudTasks-TaskRetryCount", "0"))
