@@ -1,0 +1,709 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;height:100%;background:#eef0f3;}
+@keyframes batonpulse{0%,100%{opacity:1;transform:scale(1);}50%{opacity:.3;transform:scale(.6);}}
+@keyframes batonin{from{opacity:0;transform:translateX(16px);}to{opacity:1;transform:translateX(0);}}
+@keyframes msgin{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:translateY(0);}}
+::-webkit-scrollbar{height:10px;width:10px;}
+::-webkit-scrollbar-thumb{background:#cdd2d8;border-radius:6px;border:3px solid #eef0f3;}
+</style>
+</helmet>
+
+<div style="height:100vh;display:flex;flex-direction:column;overflow:hidden;background:#eef0f3;font-family:'IBM Plex Sans JP',sans-serif;color:#2a2f38;">
+
+  <!-- ===== TOP BAR ===== -->
+  <div style="flex:none;display:flex;align-items:center;justify-content:space-between;height:54px;padding:0 20px;background:#1f2430;">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div style="width:26px;height:26px;border-radius:7px;background:#0f9488;color:#fff;font-size:14px;font-weight:700;display:flex;align-items:center;justify-content:center;">G</div>
+      <span style="font-size:15px;font-weight:700;color:#fff;letter-spacing:-.01em;">Grow</span>
+      <span style="width:1px;height:15px;background:#3a4150;"></span>
+      <span style="font-size:12px;color:#8a93a3;font-family:'JetBrains Mono',monospace;">workspace / 個人</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <span style="display:inline-flex;align-items:center;gap:6px;font-size:11px;color:#f0b66a;background:rgba(219,139,42,.16);padding:5px 11px;border-radius:7px;font-weight:600;"><span style="width:6px;height:6px;border-radius:50%;background:#db8b2a;"></span>あなたの番 {{ youCount }}</span>
+      <span style="display:inline-flex;align-items:center;gap:6px;font-size:11px;color:#5fd6c9;background:rgba(15,148,136,.18);padding:5px 11px;border-radius:7px;font-weight:600;"><span style="width:6px;height:6px;border-radius:50%;background:#2bd6c4;animation:batonpulse 1.4s infinite;"></span>AI稼働 {{ aiCount }}</span>
+      <button onClick="{{ openKnowledge }}" style="display:inline-flex;align-items:center;gap:6px;font-size:11px;color:#c7bff0;background:rgba(93,78,176,.24);padding:5px 11px;border-radius:7px;font-weight:600;border:none;cursor:pointer;font-family:inherit;">◈ ナレッジ {{ ruleCount }}</button>
+      <span style="width:28px;height:28px;border-radius:8px;background:#2c3340;color:#aeb6c2;font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center;margin-left:4px;">YK</span>
+    </div>
+  </div>
+
+  <!-- ===== BODY: BOARD + DRAWER ===== -->
+  <div style="flex:1;display:flex;min-height:0;">
+
+    <!-- BOARD -->
+    <div style="flex:1;min-width:0;overflow-x:auto;overflow-y:hidden;">
+      <div style="display:flex;gap:14px;padding:18px 20px;align-items:flex-start;height:100%;">
+        <sc-for list="{{ lanes }}" as="lane" hint-placeholder-count="5">
+          <div onDragOver="{{ lane.onDragOver }}" onDrop="{{ lane.onDrop }}" style="flex:none;width:272px;display:flex;flex-direction:column;gap:10px;height:100%;">
+            <div style="display:flex;align-items:center;justify-content:space-between;background:#fff;border:1px solid #e4e7ec;border-radius:8px;padding:7px 11px;flex:none;">
+              <span style="font-size:12.5px;font-weight:700;color:#2c333d;letter-spacing:.02em;">{{ lane.name }}</span>
+              <span style="font-size:10.5px;color:#8a909a;font-family:'JetBrains Mono',monospace;background:#f1f3f5;border-radius:5px;padding:1px 7px;">{{ lane.count }}</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:10px;overflow-y:auto;padding:2px 2px 12px;flex:1;">
+              <sc-for list="{{ lane.cards }}" as="c" hint-placeholder-count="2">
+                <div draggable="true" onDragStart="{{ c.onDragStart }}" onClick="{{ c.onClick }}" style="flex:none;position:relative;background:#fff;border:1px solid #e6e9ee;border-radius:8px;padding:11px 12px 11px 13px;display:flex;flex-direction:column;gap:8px;box-shadow:0 1px 2px rgba(20,24,40,.05);cursor:pointer;overflow:hidden;transition:box-shadow .15s,transform .12s;" style-hover="box-shadow:0 5px 16px rgba(20,24,40,.12);transform:translateY(-1px);">
+                  <sc-if value="{{ c.barAI }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;left:0;top:0;bottom:0;width:3px;background:#0f9488;"></div></sc-if>
+                  <sc-if value="{{ c.barHuman }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;left:0;top:0;bottom:0;width:3px;background:#db8b2a;"></div></sc-if>
+                  <sc-if value="{{ c.barDone }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;left:0;top:0;bottom:0;width:3px;background:#4aa876;"></div></sc-if>
+                  <div style="display:flex;align-items:center;justify-content:space-between;">
+                    <div style="display:flex;align-items:center;gap:7px;">
+                      <sc-if value="{{ c.avAI }}" hint-placeholder-val="{{ false }}"><span style="width:18px;height:18px;border-radius:5px;background:#0f9488;color:#fff;font-size:8px;font-weight:700;display:flex;align-items:center;justify-content:center;">AI</span></sc-if>
+                      <sc-if value="{{ c.avHuman }}" hint-placeholder-val="{{ false }}"><span style="width:18px;height:18px;border-radius:5px;background:#fbe6cd;color:#a5701f;font-size:8px;font-weight:700;display:flex;align-items:center;justify-content:center;">YK</span></sc-if>
+                      <span style="font-size:10px;color:#aab0b8;font-family:'JetBrains Mono',monospace;">{{ c.id }}</span>
+                    </div>
+                    <span style="display:inline-flex;align-items:center;gap:4px;font-size:10px;color:#9aa0a8;font-family:'JetBrains Mono',monospace;"><span style="width:5px;height:5px;border-radius:50%;background:#cdd2d8;"></span>{{ c.comments }}</span>
+                  </div>
+                  <div style="font-size:12.5px;font-weight:500;color:#2a2f38;line-height:1.5;">{{ c.title }}</div>
+                  <sc-if value="{{ c.hasParent }}" hint-placeholder-val="{{ false }}">
+                    <span style="display:inline-flex;align-items:center;gap:4px;align-self:flex-start;font-size:9.5px;color:#8a909a;background:#f1f3f5;border-radius:5px;padding:2px 7px;">親: {{ c.parentTag }}</span>
+                  </sc-if>
+                  <div>
+                    <sc-if value="{{ c.tWork }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:600;padding:3px 8px;border-radius:5px;background:#e1f3f1;color:#0b7a72;"><span style="width:5px;height:5px;border-radius:50%;background:#0f9488;animation:batonpulse 1.4s infinite;"></span>{{ c.label }}</span></sc-if>
+                    <sc-if value="{{ c.tSpec }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:600;padding:3px 8px;border-radius:5px;background:#ece8fb;color:#5d4eb0;"><span style="width:5px;height:5px;border-radius:50%;background:#7a6ad0;"></span>{{ c.label }}</span></sc-if>
+                    <sc-if value="{{ c.tAttention }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:600;padding:3px 8px;border-radius:5px;background:#fcefe0;color:#b5781f;"><span style="width:5px;height:5px;border-radius:50%;background:#db8b2a;animation:batonpulse 1.6s infinite;"></span>{{ c.label }}</span></sc-if>
+                    <sc-if value="{{ c.tNeutral }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:600;padding:3px 8px;border-radius:5px;background:#eef0f3;color:#868c96;"><span style="width:5px;height:5px;border-radius:50%;background:#c4c9d1;"></span>{{ c.label }}</span></sc-if>
+                    <sc-if value="{{ c.tDone }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:600;padding:3px 8px;border-radius:5px;background:#e9f4ee;color:#3a8a5f;"><span style="width:5px;height:5px;border-radius:50%;background:#4aa876;"></span>{{ c.label }}</span></sc-if>
+                  </div>
+                  <sc-if value="{{ c.hasProgress }}" hint-placeholder-val="{{ false }}">
+                    <div style="display:flex;flex-direction:column;gap:4px;">
+                      <div style="display:flex;justify-content:space-between;font-size:9.5px;color:#8a909a;font-family:'JetBrains Mono',monospace;"><span>progress</span><span>{{ c.progress }}%</span></div>
+                      <div style="height:4px;background:#e8ebef;border-radius:3px;overflow:hidden;"><div style="height:100%;border-radius:3px;background:#0f9488;width:{{ c.progressW }};"></div></div>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ c.hasSub }}" hint-placeholder-val="{{ false }}">
+                    <div style="display:flex;flex-direction:column;gap:4px;">
+                      <div style="display:flex;justify-content:space-between;font-size:9.5px;color:#8a909a;font-family:'JetBrains Mono',monospace;"><span>サブタスク</span><span>{{ c.subDone }}/{{ c.subTotal }}</span></div>
+                      <div style="height:4px;background:#e8ebef;border-radius:3px;overflow:hidden;"><div style="height:100%;border-radius:3px;background:#0f9488;width:{{ c.subW }};"></div></div>
+                    </div>
+                  </sc-if>
+                  <div style="display:flex;gap:5px;flex-wrap:wrap;">
+                    <sc-for list="{{ c.labels }}" as="label" hint-placeholder-count="1"><span style="font-size:9.5px;color:#7f858f;background:#eef0f3;border-radius:4px;padding:2px 6px;font-family:'JetBrains Mono',monospace;">{{ label }}</span></sc-for>
+                  </div>
+                </div>
+              </sc-for>
+              <button onClick="{{ lane.onAdd }}" style="border:1px dashed #cfd4db;background:#fff;border-radius:7px;padding:8px;font-size:11.5px;color:#9aa0a8;cursor:pointer;font-family:inherit;text-align:left;flex:none;">＋ カードを追加</button>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <!-- DRAWER -->
+    <sc-if value="{{ hasSelection }}" hint-placeholder-val="{{ false }}">
+      <div style="flex:none;width:412px;background:#fff;border-left:1px solid #e2e6ec;display:flex;flex-direction:column;min-height:0;box-shadow:-8px 0 30px rgba(20,24,40,.06);animation:batonin .22s ease;">
+
+        <!-- drawer header -->
+        <div style="flex:none;padding:16px 18px 14px;border-bottom:1px solid #eef0f3;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+            <span style="font-size:10.5px;color:#aab0b8;font-family:'JetBrains Mono',monospace;">{{ sel.id }} · {{ sel.laneName }}</span>
+            <button onClick="{{ closePanel }}" style="border:none;background:#f1f3f5;width:26px;height:26px;border-radius:7px;color:#7a818b;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;">✕</button>
+          </div>
+          <div style="font-size:16px;font-weight:600;color:#222831;line-height:1.45;margin-bottom:10px;">{{ sel.title }}</div>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <sc-if value="{{ sel.tWork }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:4px 10px;border-radius:6px;background:#e1f3f1;color:#0b7a72;"><span style="width:6px;height:6px;border-radius:50%;background:#0f9488;animation:batonpulse 1.4s infinite;"></span>{{ sel.label }}</span></sc-if>
+            <sc-if value="{{ sel.tSpec }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:4px 10px;border-radius:6px;background:#ece8fb;color:#5d4eb0;"><span style="width:6px;height:6px;border-radius:50%;background:#7a6ad0;"></span>{{ sel.label }}</span></sc-if>
+            <sc-if value="{{ sel.tAttention }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:4px 10px;border-radius:6px;background:#fcefe0;color:#b5781f;"><span style="width:6px;height:6px;border-radius:50%;background:#db8b2a;animation:batonpulse 1.6s infinite;"></span>{{ sel.label }}</span></sc-if>
+            <sc-if value="{{ sel.tNeutral }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:4px 10px;border-radius:6px;background:#eef0f3;color:#868c96;"><span style="width:6px;height:6px;border-radius:50%;background:#c4c9d1;"></span>{{ sel.label }}</span></sc-if>
+            <sc-if value="{{ sel.tDone }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:4px 10px;border-radius:6px;background:#e9f4ee;color:#3a8a5f;"><span style="width:6px;height:6px;border-radius:50%;background:#4aa876;"></span>{{ sel.label }}</span></sc-if>
+            <span style="font-size:11px;color:#9aa0a8;">担当: {{ sel.ownerLabel }}</span>
+          </div>
+        </div>
+
+        <!-- DETAIL MODE -->
+        <sc-if value="{{ isDetail }}" hint-placeholder-val="{{ true }}">
+          <div style="flex:1;overflow-y:auto;display:flex;flex-direction:column;min-height:0;">
+            <!-- actions -->
+            <div style="flex:none;padding:14px 18px;display:flex;gap:8px;flex-wrap:wrap;border-bottom:1px solid #f1f3f5;">
+              <button onClick="{{ sel.onAssignAI }}" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#fff;background:#0f9488;border:none;border-radius:8px;padding:9px 13px;cursor:pointer;font-family:inherit;"><span style="width:6px;height:6px;border-radius:50%;background:#bff0ea;"></span>AIにまかせる</button>
+              <button onClick="{{ sel.onStartChat }}" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#5d4eb0;background:#f1edfb;border:1px solid #e3dbf6;border-radius:8px;padding:9px 13px;cursor:pointer;font-family:inherit;">AIと壁打ち / 分解</button>
+              <button onClick="{{ sel.onMarkDone }}" style="font-size:12px;font-weight:600;color:#3a8a5f;background:#e9f4ee;border:1px solid #d3ebdd;border-radius:8px;padding:9px 13px;cursor:pointer;font-family:inherit;">完了にする</button>
+            </div>
+
+            <!-- applied rules (AIが着手前に前提にする) -->
+            <sc-if value="{{ sel.hasAppliedRules }}" hint-placeholder-val="{{ false }}">
+              <div style="flex:none;padding:13px 18px;border-bottom:1px solid #f1f3f5;background:#fbfbfe;">
+                <div style="display:flex;align-items:center;gap:7px;margin-bottom:9px;">
+                  <span style="font-size:11px;font-weight:700;color:#5d4eb0;letter-spacing:.02em;">◈ AIが着手時に前提にするルール</span>
+                  <span style="font-size:10px;color:#9aa0a8;font-family:'JetBrains Mono',monospace;">{{ sel.appliedCount }}</span>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:7px;">
+                  <sc-for list="{{ sel.appliedRules }}" as="r" hint-placeholder-count="2">
+                    <div style="display:flex;align-items:flex-start;gap:8px;">
+                      <sc-if value="{{ r.scopeTeam }}" hint-placeholder-val="{{ false }}"><span style="flex:none;margin-top:1px;font-size:8px;font-weight:700;color:#0b7a72;background:#e1f3f1;border-radius:4px;padding:2px 5px;">チーム</span></sc-if>
+                      <sc-if value="{{ r.scopePersonal }}" hint-placeholder-val="{{ false }}"><span style="flex:none;margin-top:1px;font-size:8px;font-weight:700;color:#a5701f;background:#fbe6cd;border-radius:4px;padding:2px 5px;">個人</span></sc-if>
+                      <span style="flex:1;font-size:11.5px;color:#555b66;line-height:1.5;">{{ r.text }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+            </sc-if>
+
+            <!-- learn from this task -->
+            <sc-if value="{{ sel.canLearn }}" hint-placeholder-val="{{ false }}">
+              <div style="flex:none;padding:14px 18px;border-bottom:1px solid #f1f3f5;">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+                  <div style="font-size:11.5px;color:#555b66;line-height:1.5;">このやり取りから<b style="color:#3a3f48;">働き方のルール</b>を学べます</div>
+                  <button onClick="{{ onLearnFrom }}" style="flex:none;font-size:11.5px;font-weight:700;color:#5d4eb0;background:#f1edfb;border:1px solid #e3dbf6;border-radius:8px;padding:8px 12px;cursor:pointer;font-family:inherit;">✧ 学ぶ</button>
+                </div>
+                <sc-if value="{{ sel.hasLearn }}" hint-placeholder-val="{{ false }}">
+                  <div style="margin-top:12px;border:1.5px solid #e3dbf6;border-radius:11px;overflow:hidden;animation:msgin .22s ease;">
+                    <div style="background:#f1edfb;padding:9px 12px;font-size:11px;font-weight:700;color:#5d4eb0;line-height:1.5;">AIが見つけたルール候補 — 採用でナレッジに追加</div>
+                    <div style="padding:4px 12px 10px;display:flex;flex-direction:column;">
+                      <sc-for list="{{ sel.learnItems }}" as="p" hint-placeholder-count="2">
+                        <div style="display:flex;align-items:center;gap:8px;padding:9px 0;border-bottom:1px solid #f3f1f9;">
+                          <sc-if value="{{ p.scopeTeam }}" hint-placeholder-val="{{ false }}"><span style="flex:none;font-size:8px;font-weight:700;color:#0b7a72;background:#e1f3f1;border-radius:4px;padding:2px 5px;">チーム</span></sc-if>
+                          <sc-if value="{{ p.scopePersonal }}" hint-placeholder-val="{{ false }}"><span style="flex:none;font-size:8px;font-weight:700;color:#a5701f;background:#fbe6cd;border-radius:4px;padding:2px 5px;">個人</span></sc-if>
+                          <span style="flex:1;font-size:12px;color:#3a3f48;line-height:1.45;">{{ p.text }}</span>
+                          <button onClick="{{ p.onDismiss }}" style="flex:none;font-size:13px;color:#b6bcc6;background:none;border:none;cursor:pointer;line-height:1;">✕</button>
+                          <button onClick="{{ p.onAdopt }}" style="flex:none;font-size:11px;font-weight:700;color:#fff;background:#5d4eb0;border:none;border-radius:6px;padding:5px 10px;cursor:pointer;font-family:inherit;">採用</button>
+                        </div>
+                      </sc-for>
+                    </div>
+                  </div>
+                </sc-if>
+              </div>
+            </sc-if>
+
+            <!-- subtasks -->
+            <sc-if value="{{ sel.hasChildren }}" hint-placeholder-val="{{ false }}">
+              <div style="flex:none;padding:14px 18px;border-bottom:1px solid #f1f3f5;">
+                <div style="font-size:11px;font-weight:700;color:#7a818b;letter-spacing:.04em;margin-bottom:10px;">サブタスク {{ sel.subDone }}/{{ sel.subTotal }}</div>
+                <div style="display:flex;flex-direction:column;gap:7px;">
+                  <sc-for list="{{ sel.children }}" as="ch" hint-placeholder-count="3">
+                    <div onClick="{{ ch.onClick }}" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border:1px solid #eceef2;border-radius:8px;cursor:pointer;" style-hover="background:#fafbfc;">
+                      <sc-if value="{{ ch.avAI }}" hint-placeholder-val="{{ false }}"><span style="flex:none;width:17px;height:17px;border-radius:5px;background:#0f9488;color:#fff;font-size:7.5px;font-weight:700;display:flex;align-items:center;justify-content:center;">AI</span></sc-if>
+                      <sc-if value="{{ ch.avHuman }}" hint-placeholder-val="{{ false }}"><span style="flex:none;width:17px;height:17px;border-radius:5px;background:#fbe6cd;color:#a5701f;font-size:7.5px;font-weight:700;display:flex;align-items:center;justify-content:center;">YK</span></sc-if>
+                      <span style="flex:1;font-size:12px;color:#3a3f48;line-height:1.4;">{{ ch.title }}</span>
+                      <span style="flex:none;font-size:9.5px;color:#9aa0a8;">{{ ch.label }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+            </sc-if>
+
+            <!-- activity thread -->
+            <div style="flex:1;padding:16px 18px;display:flex;flex-direction:column;gap:14px;min-height:0;">
+              <div style="font-size:11px;font-weight:700;color:#7a818b;letter-spacing:.04em;">アクティビティ</div>
+              <sc-for list="{{ sel.comments }}" as="m" hint-placeholder-count="2">
+                <div style="display:flex;gap:9px;align-items:flex-start;animation:msgin .2s ease;">
+                  <sc-if value="{{ m.isAI }}" hint-placeholder-val="{{ false }}"><span style="flex:none;width:24px;height:24px;border-radius:7px;background:#0f9488;color:#fff;font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;">AI</span></sc-if>
+                  <sc-if value="{{ m.isHuman }}" hint-placeholder-val="{{ false }}"><span style="flex:none;width:24px;height:24px;border-radius:7px;background:#fbe6cd;color:#a5701f;font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;">YK</span></sc-if>
+                  <div style="flex:1;display:flex;flex-direction:column;gap:3px;">
+                    <span style="font-size:10.5px;font-weight:600;color:#8a909a;">{{ m.name }}</span>
+                    <div style="font-size:12.5px;color:#3a3f48;line-height:1.6;background:#f6f8fa;border-radius:9px;padding:9px 11px;">{{ m.text }}</div>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+
+            <!-- composer -->
+            <div style="flex:none;padding:12px 16px;border-top:1px solid #eef0f3;background:#fafbfc;">
+              <div style="display:flex;gap:8px;align-items:flex-end;">
+                <input value="{{ draft }}" onInput="{{ onDraftInput }}" onKeyDown="{{ onDraftKey }}" placeholder="コメントで依頼・指示を残す…" style="flex:1;border:1px solid #dde2e8;border-radius:9px;padding:10px 12px;font-size:12.5px;font-family:inherit;color:#2a2f38;outline:none;background:#fff;" />
+                <button onClick="{{ postComment }}" style="flex:none;font-size:12px;font-weight:600;color:#fff;background:#1f2430;border:none;border-radius:9px;padding:10px 14px;cursor:pointer;font-family:inherit;">送信</button>
+              </div>
+            </div>
+          </div>
+        </sc-if>
+
+        <!-- CHAT / 壁打ち MODE -->
+        <sc-if value="{{ isChat }}" hint-placeholder-val="{{ false }}">
+          <div style="flex:1;display:flex;flex-direction:column;min-height:0;">
+            <div style="flex:none;padding:11px 18px;background:#f1edfb;border-bottom:1px solid #e7e0f7;display:flex;align-items:center;justify-content:space-between;">
+              <span style="display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:600;color:#5d4eb0;"><span style="width:7px;height:7px;border-radius:50%;background:#7a6ad0;"></span>壁打ちチャット — 分解の意識合わせ</span>
+              <button onClick="{{ backToDetail }}" style="border:none;background:#fff;font-size:11px;color:#7a6ad0;border-radius:6px;padding:5px 9px;cursor:pointer;font-family:inherit;font-weight:600;">← 戻る</button>
+            </div>
+
+            <div style="flex:1;overflow-y:auto;padding:16px 18px;display:flex;flex-direction:column;gap:14px;min-height:0;">
+              <sc-for list="{{ chatMessages }}" as="m" hint-placeholder-count="1">
+                <div style="display:flex;gap:9px;align-items:flex-start;animation:msgin .2s ease;">
+                  <sc-if value="{{ m.isAI }}" hint-placeholder-val="{{ false }}"><span style="flex:none;width:24px;height:24px;border-radius:7px;background:#5d4eb0;color:#fff;font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;">AI</span></sc-if>
+                  <sc-if value="{{ m.isHuman }}" hint-placeholder-val="{{ false }}"><span style="flex:none;width:24px;height:24px;border-radius:7px;background:#fbe6cd;color:#a5701f;font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;">YK</span></sc-if>
+                  <div style="flex:1;display:flex;flex-direction:column;gap:3px;">
+                    <span style="font-size:10.5px;font-weight:600;color:#8a909a;">{{ m.name }}</span>
+                    <div style="font-size:12.5px;color:#3a3f48;line-height:1.65;background:#f6f4fc;border-radius:9px;padding:9px 11px;white-space:pre-wrap;">{{ m.text }}</div>
+                  </div>
+                </div>
+              </sc-for>
+
+              <!-- proposal -->
+              <sc-if value="{{ hasProposal }}" hint-placeholder-val="{{ false }}">
+                <div style="border:1.5px solid #e3dbf6;border-radius:12px;overflow:hidden;animation:msgin .25s ease;">
+                  <div style="background:#f1edfb;padding:10px 13px;font-size:11.5px;font-weight:700;color:#5d4eb0;">提案された分解 — {{ proposalCount }} 件</div>
+                  <div style="padding:6px 13px 13px;display:flex;flex-direction:column;">
+                    <sc-for list="{{ proposal }}" as="p" hint-placeholder-count="4">
+                      <div style="display:flex;align-items:center;gap:9px;padding:9px 0;border-bottom:1px solid #f3f1f9;">
+                        <sc-if value="{{ p.ownerAI }}" hint-placeholder-val="{{ false }}"><span style="flex:none;font-size:9px;font-weight:700;color:#0b7a72;background:#e1f3f1;border-radius:5px;padding:3px 6px;">AI</span></sc-if>
+                        <sc-if value="{{ p.ownerHuman }}" hint-placeholder-val="{{ false }}"><span style="flex:none;font-size:9px;font-weight:700;color:#b5781f;background:#fcefe0;border-radius:5px;padding:3px 6px;">あなた</span></sc-if>
+                        <span style="flex:1;font-size:12px;color:#3a3f48;line-height:1.45;">{{ p.name }}</span>
+                      </div>
+                    </sc-for>
+                    <button onClick="{{ confirmBreakdown }}" style="margin-top:13px;font-size:12.5px;font-weight:700;color:#fff;background:#5d4eb0;border:none;border-radius:9px;padding:11px;cursor:pointer;font-family:inherit;">この内容でボードに反映する</button>
+                    <div style="margin-top:8px;font-size:10.5px;color:#9aa0a8;text-align:center;line-height:1.5;">反映後、AIが着手できるサブタスクから自動で進めます</div>
+                  </div>
+                </div>
+              </sc-if>
+            </div>
+
+            <div style="flex:none;padding:12px 16px;border-top:1px solid #eef0f3;background:#fafbfc;">
+              <div style="display:flex;gap:8px;align-items:flex-end;">
+                <input value="{{ chatDraft }}" onInput="{{ onChatInput }}" onKeyDown="{{ onChatKey }}" placeholder="前提や要望を伝える…" style="flex:1;border:1px solid #dde2e8;border-radius:9px;padding:10px 12px;font-size:12.5px;font-family:inherit;color:#2a2f38;outline:none;background:#fff;" />
+                <button onClick="{{ sendChat }}" style="flex:none;font-size:12px;font-weight:600;color:#fff;background:#5d4eb0;border:none;border-radius:9px;padding:10px 14px;cursor:pointer;font-family:inherit;">送信</button>
+              </div>
+            </div>
+          </div>
+        </sc-if>
+
+      </div>
+    </sc-if>
+
+  </div>
+
+  <!-- ===== KNOWLEDGE OVERLAY ===== -->
+  <sc-if value="{{ showKnowledge }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ closeKnowledge }}" style="position:fixed;inset:0;background:rgba(20,24,40,.42);display:flex;align-items:flex-start;justify-content:center;padding:56px 20px;z-index:50;animation:msgin .18s ease;">
+      <div onClick="{{ stop }}" style="width:720px;max-width:100%;max-height:84vh;background:#fff;border-radius:14px;box-shadow:0 30px 80px rgba(20,24,40,.35);display:flex;flex-direction:column;overflow:hidden;">
+        <div style="flex:none;padding:18px 22px;border-bottom:1px solid #eef0f3;display:flex;align-items:flex-start;justify-content:space-between;gap:16px;">
+          <div>
+            <div style="font-size:16px;font-weight:700;color:#222831;">ナレッジ — 学習した働き方</div>
+            <div style="font-size:12px;color:#8a909a;margin-top:5px;line-height:1.65;">AIは作業を始める前に、ここのルールを自動で読み込んでから動きます。タスクの履歴から少しずつ蓄積され、あなた専用に賢くなっていきます。</div>
+          </div>
+          <button onClick="{{ closeKnowledge }}" style="border:none;background:#f1f3f5;width:28px;height:28px;border-radius:8px;color:#7a818b;font-size:15px;cursor:pointer;flex:none;">✕</button>
+        </div>
+        <div style="flex:1;overflow-y:auto;padding:18px 22px;display:flex;flex-direction:column;gap:22px;">
+
+          <div>
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+              <span style="width:18px;height:18px;border-radius:5px;background:#fbe6cd;color:#a5701f;font-size:8px;font-weight:700;display:flex;align-items:center;justify-content:center;">YK</span>
+              <span style="font-size:12.5px;font-weight:700;color:#3a3f48;">あなたのルール</span>
+              <span style="font-size:11px;color:#9aa0a8;font-family:'JetBrains Mono',monospace;">{{ personalCount }}</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:9px;">
+              <sc-for list="{{ personalRules }}" as="r" hint-placeholder-count="3">
+                <div style="border:1px solid #eceef2;border-radius:10px;padding:12px 13px;display:flex;flex-direction:column;gap:8px;">
+                  <div style="display:flex;align-items:flex-start;gap:9px;">
+                    <sc-if value="{{ r.confHigh }}" hint-placeholder-val="{{ false }}"><span style="flex:none;margin-top:4px;width:7px;height:7px;border-radius:50%;background:#4aa876;"></span></sc-if>
+                    <sc-if value="{{ r.confMed }}" hint-placeholder-val="{{ false }}"><span style="flex:none;margin-top:4px;width:7px;height:7px;border-radius:50%;background:#db8b2a;"></span></sc-if>
+                    <sc-if value="{{ r.confLow }}" hint-placeholder-val="{{ false }}"><span style="flex:none;margin-top:4px;width:7px;height:7px;border-radius:50%;background:#c4c9d1;"></span></sc-if>
+                    <span style="flex:1;font-size:13px;color:#2a2f38;line-height:1.55;">{{ r.text }}</span>
+                    <sc-if value="{{ r.isNew }}" hint-placeholder-val="{{ false }}"><span style="flex:none;font-size:9px;font-weight:700;color:#0b7a72;background:#e1f3f1;border-radius:5px;padding:2px 6px;">NEW</span></sc-if>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:12px;padding-left:16px;flex-wrap:wrap;">
+                    <span style="font-size:10.5px;color:#9aa0a8;">出典: {{ r.source }}</span>
+                    <span style="font-size:10.5px;color:#9aa0a8;font-family:'JetBrains Mono',monospace;">適用 {{ r.applied }}回</span>
+                    <button onClick="{{ r.onPromote }}" style="margin-left:auto;font-size:10.5px;font-weight:600;color:#5d4eb0;background:#f1edfb;border:1px solid #e3dbf6;border-radius:6px;padding:4px 9px;cursor:pointer;font-family:inherit;">チームへ昇格 ↑</button>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <div>
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+              <span style="width:18px;height:18px;border-radius:5px;background:#e1f3f1;color:#0b7a72;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;">◎</span>
+              <span style="font-size:12.5px;font-weight:700;color:#3a3f48;">チームのルール（形式知）</span>
+              <span style="font-size:11px;color:#9aa0a8;font-family:'JetBrains Mono',monospace;">{{ teamCount }}</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:9px;">
+              <sc-for list="{{ teamRules }}" as="r" hint-placeholder-count="2">
+                <div style="border:1px solid #e0efec;background:#f7fcfb;border-radius:10px;padding:12px 13px;display:flex;flex-direction:column;gap:8px;">
+                  <div style="display:flex;align-items:flex-start;gap:9px;">
+                    <sc-if value="{{ r.confHigh }}" hint-placeholder-val="{{ false }}"><span style="flex:none;margin-top:4px;width:7px;height:7px;border-radius:50%;background:#4aa876;"></span></sc-if>
+                    <sc-if value="{{ r.confMed }}" hint-placeholder-val="{{ false }}"><span style="flex:none;margin-top:4px;width:7px;height:7px;border-radius:50%;background:#db8b2a;"></span></sc-if>
+                    <sc-if value="{{ r.confLow }}" hint-placeholder-val="{{ false }}"><span style="flex:none;margin-top:4px;width:7px;height:7px;border-radius:50%;background:#c4c9d1;"></span></sc-if>
+                    <span style="flex:1;font-size:13px;color:#2a2f38;line-height:1.55;">{{ r.text }}</span>
+                    <sc-if value="{{ r.isNew }}" hint-placeholder-val="{{ false }}"><span style="flex:none;font-size:9px;font-weight:700;color:#0b7a72;background:#e1f3f1;border-radius:5px;padding:2px 6px;">NEW</span></sc-if>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:12px;padding-left:16px;">
+                    <span style="font-size:10.5px;color:#9aa0a8;">出典: {{ r.source }}</span>
+                    <span style="font-size:10.5px;color:#9aa0a8;font-family:'JetBrains Mono',monospace;">適用 {{ r.applied }}回</span>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this._seq = 200;
+    const STATUS = {
+      queued:     { label: 'AI待機中',          owner: 'ai',    tone: 'neutral' },
+      breakdown:  { label: '分解しましょう',      owner: 'human', tone: 'spec' },
+      spec:       { label: '壁打ち中',           owner: 'human', tone: 'spec' },
+      ai_work:    { label: 'AI作業中',           owner: 'ai',    tone: 'work' },
+      you_todo:   { label: 'あなたの作業待ち',    owner: 'human', tone: 'attention' },
+      you_review: { label: 'あなたのレビュー待ち', owner: 'human', tone: 'attention' },
+      reviewing:  { label: 'レビュー中',          owner: 'human', tone: 'neutral' },
+      done:       { label: '完了',               owner: 'ai',    tone: 'done' },
+    };
+    this.STATUS = STATUS;
+
+    const cards = {};
+    const add = (c) => { cards[c.id] = Object.assign({ labels: [], comments: [] }, c); };
+
+    add({ id: 'T-130', title: 'ポートフォリオサイトのリニューアル', status: 'breakdown', big: true, labels: ['個人', 'デザイン'],
+      comments: [{ who: 'ai', text: 'このタスクは少し大きそうです。壁打ちで小さく分解しましょう。' }] });
+    add({ id: 'T-121', title: '確定申告に必要な書類リストを作成', status: 'queued', labels: ['経理'],
+      comments: [{ who: 'ai', text: '依頼をもらえれば着手します。' }] });
+
+    add({ id: 'T-104', title: '競合SaaS 5社の料金プランを調査', status: 'spec', labels: ['仕事', '調査'],
+      comments: [{ who: 'human', text: '料金と主要機能を比較したい。対象はあとで決めます。' }, { who: 'ai', text: '比較軸と対象サービスを一緒に決めましょう。' }] });
+    add({ id: 'T-109', title: '週次レビューのテンプレートを記入', status: 'you_todo', labels: ['個人'],
+      comments: [{ who: 'ai', text: '項目の素案を用意しました。あなたの運用に合わせて記入をお願いします。' }] });
+    add({ id: 'T-112', title: 'ブログ記事の構成案づくり', status: 'queued', labels: ['ブログ'], comments: [] });
+
+    add({ id: 'T-098', title: '競合調査レポートの下書き', status: 'ai_work', progress: 60, labels: ['仕事', '調査'],
+      comments: [{ who: 'human', text: '競合5社を料金・機能で比較して表にまとめてください。' }, { who: 'ai', text: '承知しました。対象5社を選定し着手します。' }, { who: 'ai', text: '3社目（C社）のプラン体系を分析しています…' }] });
+    add({ id: 'T-101', title: '新機能のリリースノート', status: 'you_todo', labels: ['ブログ'],
+      comments: [{ who: 'ai', text: '変更点のドラフトを作成しました。公開前に文面の確認をお願いします。' }] });
+
+    add({ id: 'T-091', title: '確定申告サマリーの最終確認', status: 'you_review', labels: ['経理'],
+      comments: [{ who: 'human', text: '今年の経費をまとめて確定申告用のサマリーにして。' }, { who: 'ai', text: '集計が完了しました。控除候補も3件見つけています。最終チェックをお願いします。' }] });
+    add({ id: 'T-089', title: '記事『AI協働術』の校正', status: 'reviewing', labels: ['ブログ'],
+      comments: [{ who: 'human', text: 'あと2段落、表現を見直し中です。' }] });
+
+    add({ id: 'T-080', title: '先週の経費を費目ごとに分類', status: 'done', labels: ['経理'], comments: [{ who: 'ai', text: '38件を費目別に分類しました。' }] });
+    add({ id: 'T-077', title: '名刺データをCSVに整理', status: 'done', labels: ['仕事'], comments: [{ who: 'ai', text: 'CSVに整形して出力済みです。' }] });
+
+    this.state = {
+      cards,
+      lanes: [
+        { key: 'backlog', name: 'バックログ', cardIds: ['T-130', 'T-121'] },
+        { key: 'todo', name: 'ToDo', cardIds: ['T-104', 'T-109', 'T-112'] },
+        { key: 'progress', name: '進行中', cardIds: ['T-098', 'T-101'] },
+        { key: 'review', name: 'レビュー', cardIds: ['T-091', 'T-089'] },
+        { key: 'done', name: '完了', cardIds: ['T-080', 'T-077'] },
+      ],
+      selectedId: null,
+      panelMode: 'detail',
+      draft: '',
+      chatDraft: '',
+      chat: {},
+      proposal: {},
+      learn: {},
+      showKnowledge: false,
+      rules: [
+        { id: 'K-01', scope: 'personal', text: 'レポートは結論→根拠の順で書き、冒頭に3行サマリーを置く', tags: ['調査','ブログ'], source: 'T-098 で2回同じ修正', conf: 'high', applied: 6 },
+        { id: 'K-02', scope: 'personal', text: '絵文字は使わない。文体は簡潔・断定調に統一する', tags: [], source: '複数タスクで一貫', conf: 'high', applied: 14 },
+        { id: 'K-03', scope: 'personal', text: '競合調査は料金を表形式にし、各項目に出典URLを付ける', tags: ['調査'], source: 'T-098', conf: 'med', applied: 2 },
+        { id: 'K-04', scope: 'team', text: '社外向け文書は敬体。数値は必ず出典を明記する', tags: [], source: 'チーム標準', conf: 'high', applied: 9 },
+        { id: 'K-05', scope: 'team', text: '経費の費目分類は自社の勘定科目マスタに合わせる', tags: ['経理'], source: '経理チーム', conf: 'high', applied: 5 },
+      ],
+    };
+    this._kseq = 5;
+
+    this.proposals = {
+      'T-130': [
+        { name: '情報設計・サイトマップ作成', owner: 'ai' },
+        { name: 'ワイヤーフレーム作成', owner: 'ai' },
+        { name: '掲載する実績コンテンツの選定', owner: 'human' },
+        { name: 'デザイン方向性の決定', owner: 'human' },
+        { name: 'コーディング・実装', owner: 'ai' },
+      ],
+    };
+    this.greetings = {
+      'T-130': '「ポートフォリオサイトのリニューアル」ですね。分解の前に確認させてください。\n① 公開したい時期は？\n② 既存サイトの資産は流用しますか？\n③ いちばん見せたい実績は？',
+    };
+    this.learnProposals = {
+      'T-098': [
+        { text: '競合ごとにセクションを分け、末尾に横断比較表を置くと差し戻しが減る', scope: 'personal', tags: ['調査'], conf: 'med' },
+        { text: '料金は必ず税抜/税込を明記する', scope: 'personal', tags: ['調査','経理'], conf: 'med' },
+      ],
+      'T-091': [
+        { text: '確定申告サマリーは控除候補を別セクションで先に提示する', scope: 'personal', tags: ['経理'], conf: 'med' },
+      ],
+    };
+  }
+
+  laneOf(id) { return this.state.lanes.find(l => l.cardIds.includes(id)); }
+  laneName(id) { const l = this.laneOf(id); return l ? l.name : ''; }
+
+  move(id, toKey) {
+    if (!id) return;
+    this.setState(s => {
+      const lanes = s.lanes.map(l => ({ ...l, cardIds: l.cardIds.filter(x => x !== id) }));
+      const t = lanes.find(l => l.key === toKey);
+      if (t && !t.cardIds.includes(id)) t.cardIds.push(id);
+      return { lanes };
+    });
+  }
+
+  patch(id, fields) {
+    this.setState(s => ({ cards: { ...s.cards, [id]: { ...s.cards[id], ...fields } } }));
+  }
+  pushComment(id, who, text) {
+    this.setState(s => {
+      const c = s.cards[id]; if (!c) return {};
+      return { cards: { ...s.cards, [id]: { ...c, comments: [...c.comments, { who, text }] } } };
+    });
+  }
+
+  select(id) { this.setState({ selectedId: id, panelMode: 'detail' }); }
+  closePanel() { this.setState({ selectedId: null }); }
+
+  assignAI(id) {
+    const rules = this.relevantRules(this.state.cards[id]);
+    this.patch(id, { status: 'ai_work', progress: 0 });
+    this.move(id, 'progress');
+    if (rules.length) {
+      const extra = rules.length > 1 ? ('「' + rules[0].text + '」ほか計' + rules.length + '件') : ('「' + rules[0].text + '」');
+      this.pushComment(id, 'ai', '承知しました。あなた／チームのルール' + extra + 'を前提に着手します。');
+      this.setState(s => ({ rules: s.rules.map(r => rules.some(x => x.id === r.id) ? { ...r, applied: r.applied + 1 } : r) }));
+    } else {
+      this.pushComment(id, 'ai', '承知しました。着手します。');
+    }
+    setTimeout(() => { this.patch(id, { progress: 45 }); this.pushComment(id, 'ai', '作業を進めています…（途中経過を共有します）'); }, 1600);
+    setTimeout(() => {
+      this.patch(id, { status: 'you_review', progress: 100 });
+      this.move(id, 'review');
+      this.pushComment(id, 'ai', '完了しました。学習済みのルールに沿って仕上げています。レビューをお願いします。');
+    }, 4200);
+  }
+
+  markDone(id) { this.patch(id, { status: 'done', progress: undefined }); this.move(id, 'done'); }
+
+  relevantRules(card) {
+    if (!card) return [];
+    const labels = card.labels || [];
+    return this.state.rules.filter(r => (r.tags || []).length === 0 || r.tags.some(t => labels.includes(t)));
+  }
+
+  learnFrom(id) {
+    const card = this.state.cards[id];
+    const base = this.learnProposals[id] || [
+      { text: 'このタスクで繰り返した指示を、今後の既定の進め方にする', scope: 'personal', tags: (card.labels || []), conf: 'low' },
+    ];
+    const items = base.map((p, i) => Object.assign({}, p, { _tmp: id + '-' + i }));
+    this.setState(s => ({ learn: { ...s.learn, [id]: items } }));
+  }
+  adoptLearn(id, tmp) {
+    this.setState(s => {
+      const list = s.learn[id] || [];
+      const item = list.find(x => x._tmp === tmp);
+      if (!item) return {};
+      const rid = 'K-' + String(++this._kseq).padStart(2, '0');
+      const rules = [...s.rules, { id: rid, scope: item.scope, text: item.text, tags: item.tags || [], source: (s.cards[id] ? s.cards[id].id : '') + ' から学習', conf: item.conf || 'med', applied: 0, isNew: true }];
+      const learn = { ...s.learn, [id]: list.filter(x => x._tmp !== tmp) };
+      const cards = { ...s.cards, [id]: { ...s.cards[id], comments: [...s.cards[id].comments, { who: 'ai', text: 'ナレッジに追加しました:「' + item.text + '」次回から自動で前提にします。' }] } };
+      return { rules, learn, cards };
+    });
+  }
+  dismissLearn(id, tmp) {
+    this.setState(s => ({ learn: { ...s.learn, [id]: (s.learn[id] || []).filter(x => x._tmp !== tmp) } }));
+  }
+  promoteRule(rid) {
+    this.setState(s => ({ rules: s.rules.map(r => r.id === rid ? { ...r, scope: 'team', isNew: true } : r) }));
+  }
+  openKnowledge() { this.setState({ showKnowledge: true }); }
+  closeKnowledge() { this.setState({ showKnowledge: false }); }
+
+  startChat(id) {
+    this.setState(s => {
+      const chat = { ...s.chat };
+      if (!chat[id] || !chat[id].length) {
+        const g = this.greetings[id] || 'このタスクですね。進め方を一緒に詰めましょう。やりたいこと・前提を教えてください。';
+        chat[id] = [{ who: 'ai', text: g }];
+      }
+      return { chat, panelMode: 'chat' };
+    });
+  }
+  backToDetail() { this.setState({ panelMode: 'detail' }); }
+
+  sendChat() {
+    const id = this.state.selectedId;
+    const text = (this.state.chatDraft || '').trim();
+    if (!id || !text) return;
+    this.setState(s => ({ chat: { ...s.chat, [id]: [...(s.chat[id] || []), { who: 'human', text }] }, chatDraft: '' }));
+    setTimeout(() => {
+      this.setState(s => ({ chat: { ...s.chat, [id]: [...(s.chat[id] || []), { who: 'ai', text: 'ありがとうございます、イメージできました。いただいた前提をふまえ、次のように分解するのはいかがでしょう。' }] } }));
+      const items = this.proposals[id] || [
+        { name: '要件・前提の整理', owner: 'ai' },
+        { name: 'たたき台の作成', owner: 'ai' },
+        { name: '内容の確認・決定', owner: 'human' },
+        { name: '仕上げ', owner: 'ai' },
+      ];
+      this.setState(s => ({ proposal: { ...s.proposal, [id]: items } }));
+    }, 850);
+  }
+
+  confirmBreakdown() {
+    const id = this.state.selectedId;
+    const items = this.state.proposal[id];
+    if (!id || !items) return;
+    const newCards = {};
+    const newIds = [];
+    const parentTitle = this.state.cards[id].title;
+    let startedFirstAI = false;
+    items.forEach((it, i) => {
+      const cid = 'T-' + (++this._seq);
+      newIds.push(cid);
+      let status = it.owner === 'ai' ? 'queued' : 'you_todo';
+      let comments = [];
+      let progress;
+      if (it.owner === 'ai' && !startedFirstAI) {
+        startedFirstAI = true;
+        status = 'ai_work';
+        progress = 10;
+        comments = [{ who: 'ai', text: 'まずこのサブタスクから着手します。' }];
+      }
+      newCards[cid] = { id: cid, title: it.name, status, parentId: id, labels: [], comments, progress };
+    });
+    this.setState(s => {
+      const cards = { ...s.cards, ...newCards };
+      cards[id] = { ...cards[id], status: 'ai_work', big: false, childIds: newIds, comments: [...cards[id].comments, { who: 'ai', text: items.length + '件のサブタスクに分解してボードに反映しました。着手できるものから進めます。' }] };
+      const lanes = s.lanes.map(l => ({ ...l, cardIds: l.cardIds.filter(x => x !== id) }));
+      const todo = lanes.find(l => l.key === 'todo');
+      todo.cardIds = [...todo.cardIds, ...newIds];
+      const prog = lanes.find(l => l.key === 'progress');
+      prog.cardIds = [id, ...prog.cardIds];
+      const proposal = { ...s.proposal }; delete proposal[id];
+      const chat = { ...s.chat, [id]: [...(s.chat[id] || []), { who: 'ai', text: 'ボードに反映しました。進行中のサブタスクから順に進めます。' }] };
+      return { cards, lanes, proposal, chat, panelMode: 'detail' };
+    });
+  }
+
+  cardView(id, ctx) {
+    const c = this.state.cards[id];
+    const def = this.STATUS[c.status] || this.STATUS.queued;
+    const owner = def.owner;
+    const isDone = c.status === 'done';
+    const childIds = c.childIds || [];
+    const subTotal = childIds.length;
+    const subDone = childIds.filter(x => this.state.cards[x] && this.state.cards[x].status === 'done').length;
+    const parent = c.parentId ? this.state.cards[c.parentId] : null;
+    const pTag = parent ? (parent.title.length > 12 ? parent.title.slice(0, 12) + '…' : parent.title) : '';
+    return {
+      id: c.id, title: c.title, label: def.label, ownerLabel: owner === 'ai' ? 'Grow (AI)' : 'あなた',
+      comments: c.comments.length, labels: c.labels || [],
+      tWork: def.tone === 'work', tSpec: def.tone === 'spec', tAttention: def.tone === 'attention',
+      tNeutral: def.tone === 'neutral', tDone: def.tone === 'done',
+      barAI: owner === 'ai' && !isDone, barHuman: owner === 'human' && !isDone, barDone: isDone,
+      avAI: owner === 'ai', avHuman: owner === 'human',
+      hasProgress: typeof c.progress === 'number', progress: c.progress, progressW: (c.progress || 0) + '%',
+      hasSub: subTotal > 0, subDone, subTotal, subW: subTotal ? Math.round(subDone / subTotal * 100) + '%' : '0%',
+      hasParent: !!parent, parentTag: pTag,
+      onClick: () => this.select(c.id),
+      onDragStart: (e) => { this._drag = c.id; if (e && e.dataTransfer) e.dataTransfer.effectAllowed = 'move'; },
+    };
+  }
+
+  renderVals() {
+    const s = this.state;
+    const lanes = s.lanes.map(l => ({
+      key: l.key, name: l.name, count: l.cardIds.length,
+      cards: l.cardIds.map(id => this.cardView(id)),
+      onDragOver: (e) => { e.preventDefault(); },
+      onDrop: (e) => { e.preventDefault(); this.move(this._drag, l.key); this._drag = null; },
+      onAdd: () => {
+        const cid = 'T-' + (++this._seq);
+        this.setState(st => {
+          const cards = { ...st.cards, [cid]: { id: cid, title: '新しいタスク', status: 'breakdown', big: true, labels: [], comments: [{ who: 'ai', text: 'タイトルと、やりたいことを教えてください。大きければ壁打ちで分解しましょう。' }] } };
+          const lns = st.lanes.map(x => x.key === l.key ? { ...x, cardIds: [...x.cardIds, cid] } : x);
+          return { cards, lanes: lns, selectedId: cid, panelMode: 'detail' };
+        });
+      },
+    }));
+
+    let youCount = 0, aiCount = 0;
+    Object.values(s.cards).forEach(c => {
+      const def = this.STATUS[c.status]; if (!def) return;
+      if (c.status === 'done') return;
+      if (def.owner === 'human') youCount++;
+      if (c.status === 'ai_work' || c.status === 'queued') aiCount++;
+    });
+
+    const out = { lanes, youCount, aiCount, hasSelection: !!s.selectedId };
+
+    const mapRule = (r) => ({
+      id: r.id, text: r.text, applied: r.applied, source: r.source,
+      confHigh: r.conf === 'high', confMed: r.conf === 'med', confLow: r.conf === 'low',
+      isNew: !!r.isNew, onPromote: () => this.promoteRule(r.id),
+    });
+    out.ruleCount = s.rules.length;
+    out.showKnowledge = s.showKnowledge;
+    out.openKnowledge = () => this.openKnowledge();
+    out.closeKnowledge = () => this.closeKnowledge();
+    out.stop = (e) => { if (e) e.stopPropagation(); };
+    out.personalRules = s.rules.filter(r => r.scope === 'personal').map(mapRule);
+    out.teamRules = s.rules.filter(r => r.scope === 'team').map(mapRule);
+    out.personalCount = out.personalRules.length;
+    out.teamCount = out.teamRules.length;
+
+    if (s.selectedId && s.cards[s.selectedId]) {
+      const id = s.selectedId;
+      const base = this.cardView(id);
+      const c = s.cards[id];
+      const childIds = c.childIds || [];
+      const sel = Object.assign({}, base, {
+        laneName: this.laneName(id),
+        hasChildren: childIds.length > 0,
+        children: childIds.map(cid => this.cardView(cid)),
+        comments: c.comments.map(m => ({ text: m.text, isAI: m.who === 'ai', isHuman: m.who === 'human', name: m.who === 'ai' ? 'Grow' : 'あなた' })),
+        onAssignAI: () => this.assignAI(id),
+        onStartChat: () => this.startChat(id),
+        onMarkDone: () => this.markDone(id),
+      });
+      out.sel = sel;
+      const appliedRules = this.relevantRules(c);
+      sel.hasAppliedRules = appliedRules.length > 0;
+      sel.appliedCount = appliedRules.length;
+      sel.appliedRules = appliedRules.map(r => ({ text: r.text, scopeTeam: r.scope === 'team', scopePersonal: r.scope === 'personal' }));
+      sel.canLearn = ['you_review', 'reviewing', 'done'].includes(c.status);
+      const li = s.learn[id] || [];
+      sel.hasLearn = li.length > 0;
+      sel.learnItems = li.map(p => ({ text: p.text, scopeTeam: p.scope === 'team', scopePersonal: p.scope === 'personal', onAdopt: () => this.adoptLearn(id, p._tmp), onDismiss: () => this.dismissLearn(id, p._tmp) }));
+      out.onLearnFrom = () => this.learnFrom(id);
+      out.isDetail = s.panelMode === 'detail';
+      out.isChat = s.panelMode === 'chat';
+      out.draft = s.draft;
+      out.chatDraft = s.chatDraft;
+      out.onDraftInput = (e) => this.setState({ draft: e.target.value });
+      out.onDraftKey = (e) => { if (e.key === 'Enter') { e.preventDefault(); this.postComment(); } };
+      out.postComment = () => {
+        const t = (this.state.draft || '').trim(); if (!t) return;
+        this.pushComment(id, 'human', t); this.setState({ draft: '' });
+      };
+      out.closePanel = () => this.closePanel();
+      out.backToDetail = () => this.backToDetail();
+      out.onChatInput = (e) => this.setState({ chatDraft: e.target.value });
+      out.onChatKey = (e) => { if (e.key === 'Enter') { e.preventDefault(); this.sendChat(); } };
+      out.sendChat = () => this.sendChat();
+      out.confirmBreakdown = () => this.confirmBreakdown();
+      const cm = s.chat[id] || [];
+      out.chatMessages = cm.map(m => ({ text: m.text, isAI: m.who === 'ai', isHuman: m.who === 'human', name: m.who === 'ai' ? 'Grow' : 'あなた' }));
+      const prop = s.proposal[id];
+      out.hasProposal = !!(prop && prop.length);
+      out.proposal = (prop || []).map(p => ({ name: p.name, ownerAI: p.owner === 'ai', ownerHuman: p.owner === 'human' }));
+      out.proposalCount = prop ? prop.length : 0;
+    } else {
+      out.isDetail = true; out.isChat = false;
+      out.closePanel = () => this.closePanel();
+    }
+    return out;
+  }
+}
+</script>
+</body>
+</html>
