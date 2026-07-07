@@ -1,4 +1,6 @@
-.PHONY: setup db-start db-stop db-reset be-dev fe-dev test test-be test-fe lint build
+.PHONY: setup db-start db-stop db-reset migrate seed be-dev fe-dev test test-be test-fe lint build
+
+DATABASE_URL ?= postgresql://grow:grow@localhost:54329/grow
 
 ## 初回セットアップ（frontend: npm / backend: uv）
 setup:
@@ -14,6 +16,13 @@ db-stop:
 
 db-reset:
 	scripts/devdb.sh reset
+
+## マイグレーション / シード（空DB前提。リセットは make db-reset → migrate → seed）
+migrate:
+	psql "$(DATABASE_URL)" -v ON_ERROR_STOP=1 -f backend/db/schema.sql
+
+seed:
+	psql "$(DATABASE_URL)" -v ON_ERROR_STOP=1 -f backend/db/seed.sql
 
 ## 開発サーバ
 be-dev:
