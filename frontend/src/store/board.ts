@@ -3,12 +3,19 @@
 // 派生値（§5.1）は保存せず、render のたびに derive* で計算する。
 
 import { create } from 'zustand';
-import { createComment, getComments } from '../lib/api.ts';
-import type { BoardResponse, LaneDto, SubtaskProposal } from '../types/api.ts';
+import { createComment, createTask, getComments, patchTask } from '../lib/api.ts';
+import { canTransition } from '../lib/stateMachine.ts';
+import type {
+  BoardResponse,
+  LaneDto,
+  SubtaskProposal,
+  TaskPatch,
+} from '../types/api.ts';
 import type {
   Artifact,
   ChatMessage,
   Comment,
+  LaneKey,
   Rule,
   RuleProposal,
   Task,
@@ -28,6 +35,7 @@ export interface BoardState {
   showKnowledge: boolean; // ナレッジ・オーバーレイ表示
   comments: Record<string, Comment[]>; // taskId -> アクティビティ（ドロワーを開いたタスクのみ読込済み）
   commentError: Record<string, string | null>; // taskId -> コメント送信/取得失敗の簡易エラー（§5.4）
+  boardError: string | null; // ボード操作（move/addCard/markDone, #8）の簡易エラー（§5.4）
   chat: Record<string, ChatMessage[]>; // taskId -> 壁打ちメッセージ
   // 分解候補（taskId -> ）。§2.3 の記載は RuleProposal[] だが、
   // §3.3.3/§5.3 の通り 担当(owner)＋名称(title) を持つ SubtaskProposal（§7.4b）が実体。
@@ -63,6 +71,21 @@ export interface BoardActions {
   /** §5.3 postComment: 入力を human コメントとして楽観的に投稿 → API → 確定/ロールバック */
   postComment: (taskId: string, text: string) => Promise<void>;
 
+  // ---- ボード操作（#8） ----
+  /**
+   * §5.3 move: 楽観的に対象レーン末尾へ移動 → PATCH {laneKey} → 失敗ならロールバック。
+   * 完了レーンへのドロップのみ done 化を自動整合（§00 #7）。canTransition 違反は
+   * API を呼ばず即フィードバック（§5.2）。同一レーンへのドロップは no-op。
+   */
+  move: (taskId: string, toLaneKey: LaneKey) => Promise<void>;
+  /**
+   * §5.3 addCard: status=breakdown の新規カードを当該レーン末尾へ作成し、
+   * AI初期コメントを付けてドロワーを開く。
+   */
+  addCard: (laneKey: LaneKey) => Promise<void>;
+  /** §5.3 markDone: PATCH {status:'done', laneKey:'done', progress:null} → 反映 */
+  markDone: (taskId: string) => Promise<void>;
+
   // ---- SSE 適用（#7 / src/lib/sse.ts から呼ばれる） ----
   /** task.updated: カードを差し替え、レーン移動も反映（全レーンから除去→laneKey へ挿入） */
   applyTaskUpdated: (task: Task) => void;
@@ -83,6 +106,7 @@ export function createInitialBoardState(): BoardState {
     showKnowledge: false,
     comments: {},
     commentError: {},
+    boardError: null,
     chat: {},
     proposal: {},
     learn: {},
@@ -104,6 +128,15 @@ export function nextTempCommentId(): string {
 function isTempCommentId(id: string): boolean {
   return id.startsWith('tmp-');
 }
+
+// ---- ボード操作の文言（#8。プロトタイプ Grow.dc.html の addCard を踏襲） ----
+
+/** addCard の新規カードのデフォルトタイトル */
+export const NEW_CARD_TITLE = '新しいタスク';
+
+/** addCard の AI 初期コメント（§5.3） */
+export const ADD_CARD_AI_PROMPT =
+  'タイトルと、やりたいことを教えてください。大きければ壁打ちで分解しましょう。';
 
 /** cards[taskId].commentCount を delta 分ずらす（カードが無ければ何もしない） */
 function shiftCommentCount(
@@ -207,6 +240,92 @@ export const useBoardStore = create<BoardStore>()((set, get) => ({
       get().confirmComment(taskId, tempId, created);
     } catch {
       get().rollbackComment(taskId, tempId, 'コメントの送信に失敗しました');
+    }
+  },
+
+  // ---- ボード操作（#8） ----
+  move: async (taskId, toLaneKey) => {
+    const s = get();
+    const task = s.cards[taskId];
+    if (task === undefined) return;
+    if (task.laneKey === toLaneKey) return; // 同一レーンへのドロップは no-op
+
+    // §00 #7: 完了レーンへドロップ = done 化のみ自動整合。それ以外は status を変えない。
+    const toDone = toLaneKey === 'done';
+    if (toDone && !canTransition(task.status, 'done')) {
+      // クライアント事前チェック（§5.2）: API を呼ばず即フィードバック
+      set({
+        boardError: `「${STATUS_META[task.status].label}」のカードは完了レーンへ移動できません`,
+      });
+      return;
+    }
+
+    // ロールバック用スナップショット（§5.4）
+    const prevCards = s.cards;
+    const prevLanes = s.lanes;
+
+    // 楽観的更新: 対象レーン末尾へ追加（§5.3 move。レーン内並べ替えは非スコープ）
+    const targetLane = s.lanes.find((lane) => lane.key === toLaneKey);
+    const orderInLane =
+      targetLane?.cardIds.filter((id) => id !== taskId).length ?? 0;
+    const optimistic: Task = toDone
+      ? { ...task, laneKey: toLaneKey, orderInLane, status: 'done', progress: undefined }
+      : { ...task, laneKey: toLaneKey, orderInLane };
+    get().applyTaskUpdated(optimistic);
+    set({ boardError: null });
+
+    try {
+      const patch: TaskPatch = toDone
+        ? { laneKey: 'done', status: 'done', progress: null }
+        : { laneKey: toLaneKey };
+      const updated = await patchTask(taskId, patch);
+      get().applyTaskUpdated(updated); // 成功レスポンスで確定
+    } catch {
+      // サーバ拒否（409 等）・通信失敗: 元状態へロールバック（§5.4）
+      set({ cards: prevCards, lanes: prevLanes, boardError: 'カードの移動に失敗しました' });
+    }
+  },
+
+  addCard: async (laneKey) => {
+    set({ boardError: null });
+    let created: Task;
+    try {
+      // status 省略時はサーバが 'breakdown' を採用（§5.3 addCard）
+      created = await createTask({ laneKey, title: NEW_CARD_TITLE });
+    } catch {
+      set({ boardError: 'カードの追加に失敗しました' });
+      return;
+    }
+    get().applyTaskUpdated(created); // 当該レーン末尾へ追加
+    try {
+      const comment = await createComment(created.id, {
+        author: 'ai',
+        text: ADD_CARD_AI_PROMPT,
+      });
+      get().addCommentOptimistic(created.id, comment); // スレッド反映＋commentCount+1
+    } catch {
+      set((st) => ({
+        commentError: {
+          ...st.commentError,
+          [created.id]: 'コメントの送信に失敗しました',
+        },
+      }));
+    }
+    get().select(created.id); // ドロワーを開く（panelMode='detail'）
+  },
+
+  markDone: async (taskId) => {
+    set({ boardError: null });
+    try {
+      // §5.3 markDone: done 化・progress クリア・完了レーンへ
+      const updated = await patchTask(taskId, {
+        status: 'done',
+        laneKey: 'done',
+        progress: null,
+      });
+      get().applyTaskUpdated(updated);
+    } catch {
+      set({ boardError: '完了にできませんでした' });
     }
   },
 

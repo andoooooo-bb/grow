@@ -211,6 +211,58 @@ describe('Composer: Enter=送信 / Shift+Enter=改行（§00 #11）', () => {
   });
 });
 
+describe('markDone 結線（#8: §5.3）', () => {
+  it('「完了にする」で PATCH {status,laneKey,progress} を送り、done・完了レーンへ反映する', async () => {
+    // T-109（todo, you_todo）: you_todo→done は許可遷移
+    const updated = {
+      ...boardFixture().cards['T-109'],
+      status: 'done',
+      laneKey: 'done',
+      orderInLane: 2,
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      if (method === 'GET' && url.endsWith('/comments')) return jsonResponse(200, []);
+      if (method === 'PATCH' && url === '/api/tasks/T-109') {
+        return jsonResponse(200, updated);
+      }
+      throw new Error(`unexpected fetch: ${method} ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    useBoardStore.getState().select('T-109');
+    render(<Drawer />);
+    await waitForLoaded('T-109');
+
+    fireEvent.click(screen.getByRole('button', { name: '完了にする' }));
+
+    await waitFor(() =>
+      expect(useBoardStore.getState().cards['T-109'].status).toBe('done'),
+    );
+    const patchCall = fetchMock.mock.calls.find(([, init]) => init?.method === 'PATCH');
+    expect(JSON.parse(String(patchCall?.[1]?.body))).toEqual({
+      status: 'done',
+      laneKey: 'done',
+      progress: null,
+    });
+    const doneLane = useBoardStore
+      .getState()
+      .lanes.find((lane) => lane.key === 'done');
+    expect(doneLane?.cardIds).toEqual(['T-080', 'T-077', 'T-109']);
+  });
+
+  it('done カードでは「完了にする」ボタンを表示しない（§03）', async () => {
+    installFetch();
+    useBoardStore.getState().select('T-080'); // done
+    render(<Drawer />);
+
+    expect(screen.queryByRole('button', { name: '完了にする' })).toBeNull();
+    // 他の2ボタンは表示される
+    expect(screen.getByRole('button', { name: 'AIにまかせる' })).toBeInTheDocument();
+    await waitForLoaded('T-080');
+  });
+});
+
 describe('楽観的更新とロールバック（§5.4）', () => {
   it('送信直後に即UI反映され、API 成功でサーバ確定版に差し替わる', async () => {
     let resolvePost!: (value: unknown) => void;

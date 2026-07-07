@@ -1,6 +1,9 @@
 // カード（§3.2）。owner/tone/label は STATUS_META から導出（§5.1）。
-// クリックで select(id) → 詳細ドロワーが開く（#7）。DnD は #8 で実装。
+// クリックで select(id) → 詳細ドロワーが開く（#7）。
+// DnD（#8）: useDraggable(id=taskId)。ドラッグ活性化後のクリックは dnd-kit が
+// capture で抑止するため、select と競合しない（活性化は Board の distance 制約）。
 
+import { useDraggable } from '@dnd-kit/core';
 import type { Task } from '../../types/domain.ts';
 import { STATUS_META } from '../../types/domain.ts';
 import { useBoardStore } from '../../store/board.ts';
@@ -34,8 +37,23 @@ export function Card({ task }: CardProps) {
   const barTone = task.status === 'done' ? 'done' : meta.owner;
   const childTotal = task.childIds?.length ?? 0;
 
+  // DnD（#8）: id=taskId が onDragEnd の active.id になる。
+  const { attributes, listeners, setNodeRef, transform, isDragging } =
+    useDraggable({ id: task.id });
+
   return (
-    <div className="card" onClick={() => select(task.id)}>
+    <div
+      ref={setNodeRef}
+      className={`card${isDragging ? ' card--dragging' : ''}`}
+      style={
+        transform !== null
+          ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` }
+          : undefined
+      }
+      onClick={() => select(task.id)}
+      {...listeners}
+      {...attributes}
+    >
       <div className={`card__bar card__bar--${barTone}`} aria-hidden="true" />
 
       <div className="card__top">

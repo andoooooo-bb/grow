@@ -47,6 +47,13 @@
   padding: 2px 2px 12px;
 }
 
+/* ドロップ先ハイライト（#8: ドラッグ中カードがレーン上にあるとき） */
+.lane--over .lane__cards {
+  outline: 2px dashed var(--color-dashed-border);
+  outline-offset: 2px;
+  border-radius: var(--radius-card);
+}
+
 /* 「＋ カードを追加」破線ボタン */
 .lane__add {
   flex: none;

@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { boardFixture } from '../test/boardFixture.ts';
-import type { Comment } from '../types/domain.ts';
+import type { Comment, LaneKey, Task } from '../types/domain.ts';
 import {
+  ADD_CARD_AI_PROMPT,
   createInitialBoardState,
   deriveAiCount,
   deriveRuleCount,
   deriveYouCount,
+  NEW_CARD_TITLE,
   useBoardStore,
 } from './board.ts';
 
@@ -182,5 +184,272 @@ describe('comment actions（#7）', () => {
     const list = useBoardStore.getState().comments['T-098'];
     expect(list).toHaveLength(1);
     expect(list[0].id).toBe('c-1');
+  });
+});
+
+// ---- ボード操作（#8: §5.3 move/addCard/markDone / §5.4 楽観的更新） ----
+
+/** 指定レーンの cardIds を返す */
+function laneIds(key: LaneKey): string[] {
+  const lane = useBoardStore.getState().lanes.find((l) => l.key === key);
+  return lane?.cardIds ?? [];
+}
+
+describe('move（#8: §5.3 / §5.2 / §5.4）', () => {
+  beforeEach(() => {
+    useBoardStore.setState({ ...createInitialBoardState(), ...boardFixture() });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('楽観的に対象レーン末尾へ移動 → PATCH {laneKey} 成功でサーバ確定版に置き換わる', async () => {
+    // T-104（todo, spec）→ progress へ
+    const server: Task = {
+      ...boardFixture().cards['T-104'],
+      laneKey: 'progress',
+      orderInLane: 2,
+    };
+    let resolvePatch!: (value: unknown) => void;
+    const fetchMock = vi.fn(
+      (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Promise((resolve) => (resolvePatch = resolve)),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const pending = useBoardStore.getState().move('T-104', 'progress');
+
+    // await 前 = API 応答前に反映されている（§5.4 楽観的更新）
+    let s = useBoardStore.getState();
+    expect(laneIds('todo')).toEqual(['T-109', 'T-112']);
+    expect(laneIds('progress')).toEqual(['T-098', 'T-101', 'T-104']); // 末尾へ追加
+    expect(s.cards['T-104'].laneKey).toBe('progress');
+    expect(s.cards['T-104'].status).toBe('spec'); // 手動DnDは status を変えない（§5.2）
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/tasks/T-104',
+      expect.objectContaining({ method: 'PATCH' }),
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      laneKey: 'progress',
+    });
+
+    resolvePatch(jsonResponse(200, server));
+    await pending;
+    s = useBoardStore.getState();
+    expect(s.cards['T-104']).toEqual(server);
+    expect(laneIds('progress')).toEqual(['T-098', 'T-101', 'T-104']);
+    expect(s.boardError).toBeNull();
+  });
+
+  it('PATCH 失敗で元状態へロールバック＋boardError を設定する（§5.4）', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(500, {})));
+    const before = useBoardStore.getState();
+
+    await useBoardStore.getState().move('T-104', 'progress');
+
+    const s = useBoardStore.getState();
+    expect(s.lanes).toEqual(before.lanes);
+    expect(s.cards).toEqual(before.cards);
+    expect(s.boardError).toBe('カードの移動に失敗しました');
+  });
+
+  it('同一レーンへのドロップは no-op（API を呼ばない）', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const before = useBoardStore.getState();
+
+    await useBoardStore.getState().move('T-104', 'todo');
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(useBoardStore.getState().lanes).toEqual(before.lanes);
+  });
+
+  it('完了レーンへドロップ: you_review→done は done 化のみ自動整合して PATCH（§00 #7）', async () => {
+    // T-091（review, you_review）→ done へ
+    const server: Task = {
+      ...boardFixture().cards['T-091'],
+      laneKey: 'done',
+      status: 'done',
+      orderInLane: 2,
+    };
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        jsonResponse(200, server),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await useBoardStore.getState().move('T-091', 'done');
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      laneKey: 'done',
+      status: 'done',
+      progress: null,
+    });
+    const s = useBoardStore.getState();
+    expect(s.cards['T-091'].status).toBe('done');
+    expect(laneIds('review')).toEqual(['T-089']);
+    expect(laneIds('done')).toEqual(['T-080', 'T-077', 'T-091']);
+  });
+
+  it('完了レーンへドロップ: queued→done は事前チェックで拒否され API 未呼び出し＋フィードバック', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const before = useBoardStore.getState();
+
+    await useBoardStore.getState().move('T-112', 'done'); // T-112 は queued
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    const s = useBoardStore.getState();
+    expect(s.lanes).toEqual(before.lanes); // 動いていない（即ロールバック相当）
+    expect(s.cards['T-112'].laneKey).toBe('todo');
+    expect(s.boardError).toBe('「AI待機中」のカードは完了レーンへ移動できません');
+  });
+
+  it('完了レーンへドロップ: サーバ 409 でもロールバックする', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(409, {})));
+    const before = useBoardStore.getState();
+
+    await useBoardStore.getState().move('T-091', 'done'); // 事前チェックは通る
+
+    const s = useBoardStore.getState();
+    expect(s.lanes).toEqual(before.lanes);
+    expect(s.cards).toEqual(before.cards);
+    expect(s.boardError).toBe('カードの移動に失敗しました');
+  });
+});
+
+describe('addCard（#8: §5.3）', () => {
+  beforeEach(() => {
+    useBoardStore.setState({ ...createInitialBoardState(), ...boardFixture() });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const created: Task = {
+    id: 'T-200',
+    workspaceId: 'ws-1',
+    boardId: 'board-1',
+    laneKey: 'backlog',
+    orderInLane: 2,
+    title: NEW_CARD_TITLE,
+    status: 'breakdown',
+    ownerUserId: 'user-yk',
+    labels: [],
+    commentCount: 0,
+    createdAt: AT,
+    updatedAt: AT,
+  };
+
+  const aiComment: Comment = {
+    id: 'c-ai-1',
+    taskId: 'T-200',
+    author: 'ai',
+    text: ADD_CARD_AI_PROMPT,
+    createdAt: AT,
+  };
+
+  it('POST /api/tasks → AI初期コメント → ストア反映＋ドロワーを開く', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (init?.method === 'POST' && url === '/api/tasks') {
+        return jsonResponse(201, created);
+      }
+      if (init?.method === 'POST' && url === '/api/tasks/T-200/comments') {
+        return jsonResponse(201, aiComment);
+      }
+      throw new Error(`unexpected fetch: ${init?.method ?? 'GET'} ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await useBoardStore.getState().addCard('backlog');
+
+    // 呼び出し内容（status 省略時 breakdown / AIコメント文言）
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      laneKey: 'backlog',
+      title: '新しいタスク',
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
+      author: 'ai',
+      text: 'タイトルと、やりたいことを教えてください。大きければ壁打ちで分解しましょう。',
+    });
+
+    // ストア反映: カード追加（当該レーン末尾）＋コメント＋ドロワーを開く
+    const s = useBoardStore.getState();
+    expect(s.cards['T-200'].status).toBe('breakdown');
+    expect(s.cards['T-200'].commentCount).toBe(1);
+    expect(laneIds('backlog')).toEqual(['T-130', 'T-121', 'T-200']);
+    expect(s.comments['T-200']).toEqual([aiComment]);
+    expect(s.selectedId).toBe('T-200');
+    expect(s.panelMode).toBe('detail');
+  });
+
+  it('POST /api/tasks 失敗で boardError を設定し、何も追加しない', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(500, {})));
+    const before = useBoardStore.getState();
+
+    await useBoardStore.getState().addCard('backlog');
+
+    const s = useBoardStore.getState();
+    expect(s.cards).toEqual(before.cards);
+    expect(s.lanes).toEqual(before.lanes);
+    expect(s.selectedId).toBeNull();
+    expect(s.boardError).toBe('カードの追加に失敗しました');
+  });
+});
+
+describe('markDone（#8: §5.3）', () => {
+  beforeEach(() => {
+    useBoardStore.setState({ ...createInitialBoardState(), ...boardFixture() });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('PATCH {status:done, laneKey:done, progress:null} → 応答を反映し完了レーンへ移動する', async () => {
+    // T-109（todo, you_todo）: you_todo→done は許可遷移
+    const server: Task = {
+      ...boardFixture().cards['T-109'],
+      laneKey: 'done',
+      status: 'done',
+      orderInLane: 2,
+    };
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        jsonResponse(200, server),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await useBoardStore.getState().markDone('T-109');
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/tasks/T-109',
+      expect.objectContaining({ method: 'PATCH' }),
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      status: 'done',
+      laneKey: 'done',
+      progress: null,
+    });
+    const s = useBoardStore.getState();
+    expect(s.cards['T-109']).toEqual(server);
+    expect(laneIds('todo')).toEqual(['T-104', 'T-112']);
+    expect(laneIds('done')).toEqual(['T-080', 'T-077', 'T-109']);
+  });
+
+  it('PATCH 失敗（不正遷移 409 等）で boardError を設定し、状態を変えない', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(409, {})));
+    const before = useBoardStore.getState();
+
+    await useBoardStore.getState().markDone('T-112'); // queued→done は不正遷移
+
+    const s = useBoardStore.getState();
+    expect(s.cards).toEqual(before.cards);
+    expect(s.lanes).toEqual(before.lanes);
+    expect(s.boardError).toBe('完了にできませんでした');
   });
 });

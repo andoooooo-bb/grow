@@ -17,6 +17,7 @@ export function Drawer() {
   );
   const panelMode = useBoardStore((s) => s.panelMode);
   const loadComments = useBoardStore((s) => s.loadComments);
+  const markDone = useBoardStore((s) => s.markDone);
 
   // ドロワーを開いたら GET /tasks/:id/comments でスレッドを読み込む（#7）
   useEffect(() => {
@@ -30,7 +31,12 @@ export function Drawer() {
       <DrawerHeader task={task} />
       {panelMode === 'detail' && (
         <div className="drawer__detail">
-          <ActionBar />
+          {/* markDone 結線（#8）。done カードでは「完了にする」を出さない（§03） */}
+          <ActionBar
+            onMarkDone={
+              task.status !== 'done' ? () => void markDone(task.id) : undefined
+            }
+          />
           <ActivityThread taskId={task.id} />
           <Composer taskId={task.id} />
         </div>
