@@ -57,22 +57,10 @@ def test_factory_returns_mock_when_env_is_mock(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_factory_returns_gemini_when_env_is_gemini(monkeypatch: pytest.MonkeyPatch):
+    """Gemini 実装（#15）の振る舞い自体は tests/test_gemini_provider.py で検証する。"""
     monkeypatch.setenv("AI_PROVIDER", "gemini")
     get_settings.cache_clear()
     assert isinstance(get_provider(), GeminiProvider)
-
-
-async def test_gemini_stub_raises_not_implemented():
-    gemini = GeminiProvider()
-    task = _task()
-    with pytest.raises(NotImplementedError):
-        await gemini.execute(task, [], [])
-    with pytest.raises(NotImplementedError):
-        await gemini.propose_subtasks(task, [], [])
-    with pytest.raises(NotImplementedError):
-        await gemini.propose_rules(task, [], [])
-    with pytest.raises(NotImplementedError):
-        await gemini.chat_reply(task, [], [])
 
 
 # --- chat_reply（§7.4a / 05 §5.3） ---

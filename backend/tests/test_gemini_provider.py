@@ -1,0 +1,511 @@
+"""GeminiProvider のテスト（Issue #15, §7.1/§7.3〜§7.5）。
+
+実GCP・実ネットワークは一切叩かない。google.genai.Client をフェイクに差し替え、
+応答は実SDKの types.GenerateContentResponse を組み立てて返す（パース処理が実際の
+SDK 型と整合することを担保）。フェイク未設置で Client が生成された場合はテストを
+失敗させるため、遅延初期化の検証も兼ねてネットワーク接続が発生しないことを保証する。
+"""
+
+from types import SimpleNamespace
+
+import pytest
+from google.genai import types
+
+import app.ai.gemini_provider as gemini_module
+from app.ai import get_provider
+from app.ai.gemini_provider import GeminiProvider, GeminiResponseError
+from app.ai.provider import RuleProposal, SubtaskProposal
+from app.config import get_settings
+
+
+@pytest.fixture(autouse=True)
+def _reset_settings_cache():
+    """get_settings は lru_cache 済みのため、環境変数切替の前後でキャッシュを破棄する。"""
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def _forbid_real_client(monkeypatch: pytest.MonkeyPatch):
+    """既定では genai.Client の生成自体を禁止する（実ネットワーク接続の芽を断つ）。
+
+    Client を使うテストは patch_client フィクスチャで明示的にフェイクを設置する。
+    """
+
+    def _fail(**kwargs):
+        raise AssertionError("genai.Client が生成されました（テストでは禁止）")
+
+    monkeypatch.setattr(gemini_module.genai, "Client", _fail)
+
+
+class FakeAsyncModels:
+    """client.aio.models.generate_content の記録付きフェイク。"""
+
+    def __init__(self, responses: list[types.GenerateContentResponse]) -> None:
+        self._responses = list(responses)
+        self.calls: list[dict] = []
+
+    async def generate_content(self, *, model, contents, config=None):
+        self.calls.append({"model": model, "contents": contents, "config": config})
+        assert self._responses, "予期しない generate_content 呼び出し"
+        return self._responses.pop(0)
+
+
+class FakeClient:
+    def __init__(self, responses: list[types.GenerateContentResponse]) -> None:
+        self.init_kwargs: dict | None = None
+        self.models = FakeAsyncModels(responses)
+        self.aio = SimpleNamespace(models=self.models)
+
+
+@pytest.fixture
+def patch_client(monkeypatch: pytest.MonkeyPatch):
+    """genai.Client をフェイクに差し替え、キューした応答を返すファクトリを提供する。"""
+    state = {"constructed": 0}
+
+    def install(*responses: types.GenerateContentResponse) -> FakeClient:
+        fake = FakeClient(list(responses))
+
+        def factory(**kwargs):
+            state["constructed"] += 1
+            fake.init_kwargs = kwargs
+            return fake
+
+        monkeypatch.setattr(gemini_module.genai, "Client", factory)
+        fake.constructed = lambda: state["constructed"]  # type: ignore[attr-defined]
+        return fake
+
+    return install
+
+
+# ---- 応答の組み立てヘルパ（実SDK型を使用） -----------------------------------------
+
+
+def _usage_meta(input_tokens: int, output_tokens: int):
+    return types.GenerateContentResponseUsageMetadata(
+        prompt_token_count=input_tokens, candidates_token_count=output_tokens
+    )
+
+
+def _grounding(*pairs: tuple[str, str | None]) -> types.GroundingMetadata:
+    return types.GroundingMetadata(
+        grounding_chunks=[
+            types.GroundingChunk(web=types.GroundingChunkWeb(uri=uri, title=title))
+            for uri, title in pairs
+        ]
+    )
+
+
+def _text_response(
+    text: str,
+    *,
+    grounding: types.GroundingMetadata | None = None,
+    usage: tuple[int, int] = (120, 34),
+) -> types.GenerateContentResponse:
+    candidate = types.Candidate(
+        content=types.Content(role="model", parts=[types.Part(text=text)]),
+        grounding_metadata=grounding,
+    )
+    return types.GenerateContentResponse(
+        candidates=[candidate], usage_metadata=_usage_meta(*usage)
+    )
+
+
+def _function_call_response(
+    name: str, args: dict, *, usage: tuple[int, int] = (80, 21)
+) -> types.GenerateContentResponse:
+    candidate = types.Candidate(
+        content=types.Content(
+            role="model",
+            parts=[types.Part(function_call=types.FunctionCall(name=name, args=args))],
+        )
+    )
+    return types.GenerateContentResponse(
+        candidates=[candidate], usage_metadata=_usage_meta(*usage)
+    )
+
+
+def _task(human_id: str = "T-104", title: str = "競合SaaS 5社の料金プランを調査"):
+    return {
+        "id": f"uuid-{human_id}",
+        "humanId": human_id,
+        "title": title,
+        "labels": ["仕事", "調査"],
+    }
+
+
+_RULES = [
+    {
+        "id": "K-01",
+        "text": "レポートは結論→根拠の順で書き、冒頭に3行サマリーを置く",
+        "scope": "personal",
+        "confidence": "high",
+        "tags": ["調査"],
+        "source": "T-098 のレビューから抽出",
+    },
+    {
+        "id": "K-03",
+        "text": "競合調査は料金を表形式にし、各項目に出典URLを付ける",
+        "scope": "team",
+        "confidence": "med",
+        "tags": ["調査"],
+        "source": "チーム合意",
+    },
+]
+
+
+# ---- (a) ファクトリ / (e) 遅延初期化 ------------------------------------------------
+
+
+def test_factory_returns_gemini_provider(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("AI_PROVIDER", "gemini")
+    get_settings.cache_clear()
+    assert isinstance(get_provider(), GeminiProvider)
+
+
+def test_instantiation_does_not_create_client():
+    """インスタンス化だけでは Client を作らない（autouse の禁止パッチが発火しない）。"""
+    provider = GeminiProvider()
+    assert provider._client is None
+
+
+async def test_client_is_created_lazily_and_reused(
+    patch_client, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("GCP_PROJECT", "proj-test")
+    monkeypatch.setenv("GCP_LOCATION", "asia-northeast1")
+    get_settings.cache_clear()
+    fake = patch_client(
+        _text_response("応答1"),
+        _text_response("応答2"),
+    )
+    provider = GeminiProvider()
+    assert fake.constructed() == 0  # まだ作られない
+    await provider.chat_reply(_task(), [], [])
+    await provider.chat_reply(_task(), [], [])
+    assert fake.constructed() == 1  # 初回呼び出しで1度だけ生成・以後再利用
+    assert fake.init_kwargs == {
+        "vertexai": True,
+        "project": "proj-test",
+        "location": "asia-northeast1",
+    }
+
+
+# ---- (b) execute（§7.3） -----------------------------------------------------------
+
+
+async def test_execute_injects_rules_and_history_into_system_prompt(patch_client):
+    fake = patch_client(_text_response("# レポート"))
+    comments = [{"who": "human", "text": "候補は5社に絞ってください"}]
+    await GeminiProvider().execute(_task(), _RULES, comments)
+
+    call = fake.models.calls[0]
+    system = call["config"].system_instruction
+    assert "# 適用ルール（優先度: 高→低）" in system
+    assert (
+        "- [personal/high] レポートは結論→根拠の順で書き、冒頭に3行サマリーを置く"
+        "（出典: T-098 のレビューから抽出）" in system
+    )
+    assert "- [team/med] 競合調査は料金を表形式にし、各項目に出典URLを付ける" in system
+    assert "タイトル: 競合SaaS 5社の料金プランを調査" in system
+    assert "ラベル: 仕事, 調査" in system
+    assert "human: 候補は5社に絞ってください" in system  # 履歴の注入
+    assert "# 指示" in system
+
+
+async def test_execute_omits_rules_section_when_no_rules(patch_client):
+    fake = patch_client(_text_response("# レポート"))
+    await GeminiProvider().execute(_task(), [], [])
+    system = fake.models.calls[0]["config"].system_instruction
+    assert "# 適用ルール" not in system
+
+
+async def test_execute_uses_google_search_grounding_and_pro_model(patch_client):
+    fake = patch_client(_text_response("# レポート"))
+    await GeminiProvider().execute(_task(), [], [])
+    call = fake.models.calls[0]
+    assert call["model"] == "gemini-2.5-pro"  # 実作業は Pro 系（§00 #6）
+    tools = call["config"].tools
+    assert any(t.google_search is not None for t in tools)
+    assert all(not t.function_declarations for t in tools)  # execute は FC を使わない
+
+
+async def test_execute_model_is_overridable_by_env(
+    patch_client, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("GEMINI_MODEL_EXECUTE", "gemini-9.9-custom")
+    get_settings.cache_clear()
+    fake = patch_client(_text_response("# レポート"))
+    await GeminiProvider().execute(_task(), [], [])
+    assert fake.models.calls[0]["model"] == "gemini-9.9-custom"
+
+
+async def test_execute_appends_grounding_sources_and_usage(patch_client):
+    grounding = _grounding(
+        ("https://example.com/pricing", "料金ページ"),
+        ("https://example.com/docs", None),
+        ("https://example.com/pricing", "重複は捨てる"),
+    )
+    patch_client(
+        _text_response("# 調査レポート\n\n本文です。", grounding=grounding, usage=(321, 45))
+    )
+    result = await GeminiProvider().execute(_task(), [], [])
+
+    assert result.content_md.startswith("# 調査レポート")
+    assert "## 出典" in result.content_md
+    assert "- [料金ページ](https://example.com/pricing)" in result.content_md
+    assert "- https://example.com/docs" in result.content_md
+    assert result.content_md.count("https://example.com/pricing") == 1  # 重複なし
+    assert result.usage.input_tokens == 321
+    assert result.usage.output_tokens == 45
+
+
+async def test_execute_without_grounding_keeps_text_as_is(patch_client):
+    patch_client(_text_response("# レポートのみ"))
+    result = await GeminiProvider().execute(_task(), [], [])
+    assert result.content_md == "# レポートのみ"
+    assert "## 出典" not in result.content_md
+
+
+async def test_execute_raises_on_empty_response(patch_client):
+    patch_client(types.GenerateContentResponse(candidates=[]))
+    with pytest.raises(GeminiResponseError):
+        await GeminiProvider().execute(_task(), [], [])
+
+
+async def test_usage_defaults_to_zero_when_metadata_missing(patch_client):
+    candidate = types.Candidate(content=types.Content(role="model", parts=[types.Part(text="x")]))
+    patch_client(types.GenerateContentResponse(candidates=[candidate]))
+    result = await GeminiProvider().execute(_task(), [], [])
+    assert result.usage.input_tokens == 0
+    assert result.usage.output_tokens == 0
+
+
+# ---- (c) propose_subtasks（§7.4b） -------------------------------------------------
+
+
+async def test_propose_subtasks_declares_schema_and_forces_function_calling(patch_client):
+    fake = patch_client(_function_call_response("propose_subtasks", {"subtasks": []}))
+    await GeminiProvider().propose_subtasks(_task(), [], [])
+
+    call = fake.models.calls[0]
+    assert call["model"] == "gemini-2.5-flash"  # 分解は Flash 系（§00 #6）
+
+    decl = call["config"].tools[0].function_declarations[0]
+    assert decl.name == "propose_subtasks"
+    assert decl.parameters.type == types.Type.OBJECT
+    assert decl.parameters.required == ["subtasks"]
+    item = decl.parameters.properties["subtasks"].items
+    assert set(item.properties.keys()) == {"title", "owner", "rationale"}
+    assert item.properties["owner"].enum == ["ai", "human"]
+    assert item.required == ["title", "owner"]
+
+    fc = call["config"].tool_config.function_calling_config
+    assert fc.mode == types.FunctionCallingConfigMode.ANY  # function calling を強制
+    assert fc.allowed_function_names == ["propose_subtasks"]
+
+
+async def test_propose_subtasks_converts_function_call_args(patch_client):
+    patch_client(
+        _function_call_response(
+            "propose_subtasks",
+            {
+                "subtasks": [
+                    {"title": "情報設計・サイトマップ作成", "owner": "ai"},
+                    {
+                        "title": "デザイン方向性の決定",
+                        "owner": "human",
+                        "rationale": "好み・ブランドに関わる判断は人が行うため",
+                    },
+                ]
+            },
+            usage=(150, 60),
+        )
+    )
+    result = await GeminiProvider().propose_subtasks(_task(), [], [])
+    assert result.subtasks == [
+        SubtaskProposal(title="情報設計・サイトマップ作成", owner="ai", rationale=None),
+        SubtaskProposal(
+            title="デザイン方向性の決定",
+            owner="human",
+            rationale="好み・ブランドに関わる判断は人が行うため",
+        ),
+    ]
+    assert result.usage.input_tokens == 150
+    assert result.usage.output_tokens == 60
+
+
+async def test_propose_subtasks_maps_chat_history_into_contents(patch_client):
+    fake = patch_client(_function_call_response("propose_subtasks", {"subtasks": []}))
+    chat = [
+        {"who": "ai", "text": "前提を3点教えてください"},
+        {"who": "human", "text": "3月末公開・資産は流用します"},
+    ]
+    await GeminiProvider().propose_subtasks(_task(), chat, [])
+    contents = fake.models.calls[0]["contents"]
+    assert [c.role for c in contents[:2]] == ["model", "user"]
+    assert contents[0].parts[0].text == "前提を3点教えてください"
+    assert contents[-1].role == "user"  # 末尾にツール呼び出し指示
+
+
+async def test_propose_subtasks_raises_without_function_call(patch_client):
+    patch_client(_text_response("自由文で分解します: 1. …"))
+    with pytest.raises(GeminiResponseError):
+        await GeminiProvider().propose_subtasks(_task(), [], [])
+
+
+async def test_propose_subtasks_raises_on_invalid_owner(patch_client):
+    patch_client(
+        _function_call_response(
+            "propose_subtasks", {"subtasks": [{"title": "x", "owner": "robot"}]}
+        )
+    )
+    with pytest.raises(GeminiResponseError):
+        await GeminiProvider().propose_subtasks(_task(), [], [])
+
+
+# ---- (c) propose_rules（§7.5） -----------------------------------------------------
+
+
+async def test_propose_rules_declares_schema_and_distill_principles(patch_client):
+    fake = patch_client(_function_call_response("propose_rules", {"rules": []}))
+    comments = [{"who": "human", "text": "税抜/税込を明記してください"}]
+    chat = [{"who": "human", "text": "比較表を末尾に置いて"}]
+    await GeminiProvider().propose_rules(_task(), comments, chat)
+
+    call = fake.models.calls[0]
+    assert call["model"] == "gemini-2.5-flash"  # 蒸留は Flash 系（§00 #6）
+
+    system = call["config"].system_instruction
+    assert "3件以内。無ければ空で良い（無理に作らない）。" in system
+    assert "固有名詞・機密・個人情報はルール文に含めない（一般化する）。" in system
+    assert "差し戻し・修正・繰り返された指示は特に良い材料。" in system
+    assert "human: 税抜/税込を明記してください" in system  # コメント履歴の注入
+    assert "human: 比較表を末尾に置いて" in system  # チャット履歴の注入
+
+    decl = call["config"].tools[0].function_declarations[0]
+    assert decl.name == "propose_rules"
+    assert decl.parameters.required == ["rules"]
+    item = decl.parameters.properties["rules"].items
+    assert set(item.properties.keys()) == {"text", "scope", "tags", "confidence", "source"}
+    assert item.properties["scope"].enum == ["personal", "team"]
+    assert item.properties["confidence"].enum == ["high", "med", "low"]
+    assert item.properties["tags"].type == types.Type.ARRAY
+    assert item.required == ["text", "scope", "tags", "confidence"]
+
+    fc = call["config"].tool_config.function_calling_config
+    assert fc.mode == types.FunctionCallingConfigMode.ANY
+    assert fc.allowed_function_names == ["propose_rules"]
+
+
+async def test_propose_rules_converts_function_call_args(patch_client):
+    patch_client(
+        _function_call_response(
+            "propose_rules",
+            {
+                "rules": [
+                    {
+                        "text": "料金は必ず税抜/税込を明記する",
+                        "scope": "personal",
+                        "tags": ["調査", "経理"],
+                        "confidence": "med",
+                        "source": "同じ修正指示が2回あった",
+                    },
+                    {  # source は §7.5 スキーマ上任意 → 既定は空文字
+                        "text": "比較表を末尾に置く",
+                        "scope": "team",
+                        "tags": [],
+                        "confidence": "low",
+                    },
+                ]
+            },
+            usage=(200, 88),
+        )
+    )
+    result = await GeminiProvider().propose_rules(_task(), [], [])
+    assert result.rules == [
+        RuleProposal(
+            text="料金は必ず税抜/税込を明記する",
+            scope="personal",
+            tags=["調査", "経理"],
+            confidence="med",
+            source="同じ修正指示が2回あった",
+        ),
+        RuleProposal(
+            text="比較表を末尾に置く", scope="team", tags=[], confidence="low", source=""
+        ),
+    ]
+    assert result.usage.input_tokens == 200
+    assert result.usage.output_tokens == 88
+
+
+async def test_propose_rules_raises_without_function_call(patch_client):
+    patch_client(_text_response("ルール: 比較表を置く"))
+    with pytest.raises(GeminiResponseError):
+        await GeminiProvider().propose_rules(_task(), [], [])
+
+
+async def test_propose_rules_raises_on_invalid_confidence(patch_client):
+    patch_client(
+        _function_call_response(
+            "propose_rules",
+            {"rules": [{"text": "x", "scope": "personal", "tags": [], "confidence": "最強"}]},
+        )
+    )
+    with pytest.raises(GeminiResponseError):
+        await GeminiProvider().propose_rules(_task(), [], [])
+
+
+# ---- (d) chat_reply（§7.4a） -------------------------------------------------------
+
+
+async def test_chat_reply_maps_history_roles_and_returns_text(patch_client):
+    fake = patch_client(
+        _text_response("① 公開時期は？ ② 資産は流用？ ③ 見せたい実績は？", usage=(90, 30))
+    )
+    chat = [
+        {"who": "human", "text": "ポートフォリオを刷新したい"},
+        {"who": "ai", "text": "前提を確認させてください"},
+        {"who": "human", "text": "3月末までに公開したい"},
+    ]
+    task = _task("T-130", "ポートフォリオサイトのリニューアル")
+    result = await GeminiProvider().chat_reply(task, chat, [])
+
+    contents = fake.models.calls[0]["contents"]
+    assert [c.role for c in contents] == ["user", "model", "user"]  # human→user / ai→model
+    assert [c.parts[0].text for c in contents] == [
+        "ポートフォリオを刷新したい",
+        "前提を確認させてください",
+        "3月末までに公開したい",
+    ]
+    assert result.text == "① 公開時期は？ ② 資産は流用？ ③ 見せたい実績は？"
+    assert result.usage.input_tokens == 90
+    assert result.usage.output_tokens == 30
+
+
+async def test_chat_reply_uses_light_model_and_planning_system_with_rules(patch_client):
+    fake = patch_client(_text_response("質問です"))
+    await GeminiProvider().chat_reply(_task(), [], _RULES)
+    call = fake.models.calls[0]
+    assert call["model"] == "gemini-2.5-flash"  # 壁打ちは Flash 系（§00 #6）
+    system = call["config"].system_instruction
+    assert "3 点以内の的確な質問" in system
+    assert "# 適用ルール（優先度: 高→低）" in system  # ルール注入（§7.4a）
+    assert "タスク: 競合SaaS 5社の料金プランを調査 / ラベル: 仕事, 調査" in system
+    assert call["config"].tools is None  # 壁打ちはツール不要
+
+
+async def test_chat_reply_with_empty_history_sends_opening_user_message(patch_client):
+    fake = patch_client(_text_response("初回質問"))
+    await GeminiProvider().chat_reply(_task(), [], [])
+    contents = fake.models.calls[0]["contents"]
+    assert len(contents) == 1
+    assert contents[0].role == "user"  # contents は空にできないため開始メッセージを置く
+    assert contents[0].parts[0].text
+
+
+async def test_chat_reply_raises_on_textless_response(patch_client):
+    patch_client(_function_call_response("propose_subtasks", {"subtasks": []}))
+    with pytest.raises(GeminiResponseError):
+        await GeminiProvider().chat_reply(_task(), [], [])

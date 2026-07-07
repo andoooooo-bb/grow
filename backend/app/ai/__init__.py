@@ -15,7 +15,7 @@ def get_provider() -> AiProvider:
     """config.AI_PROVIDER に応じた AiProvider 実装を返すファクトリ。"""
     settings = get_settings()
     if settings.ai_provider == "gemini":
-        # Gemini 実装は Issue #15。現状はスタブ（各メソッドが NotImplementedError）。
+        # Vertex AI Gemini 実装（#15）。google-genai は import が重いので遅延 import。
         from app.ai.gemini_provider import GeminiProvider
 
         return GeminiProvider()

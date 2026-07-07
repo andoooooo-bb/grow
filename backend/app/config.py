@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     gcp_location: str = "asia-northeast1"
     cloud_tasks_queue: str = "grow-jobs"
 
+    # Vertex AI Gemini のモデル割当（00 §0.2 論点#6: コスト最小化）。
+    # 実作業（execute）は品質要求が高いため Pro 系、分解/蒸留/壁打ちは Flash 系。
+    # 環境変数 GEMINI_MODEL_EXECUTE / GEMINI_MODEL_LIGHT で上書き可。
+    gemini_model_execute: str = "gemini-2.5-pro"
+    gemini_model_light: str = "gemini-2.5-flash"
+
     # Cloud Tasks が worker エンドポイントへ push する際の自サービスURL
     self_url: str = "http://localhost:8000"
 
