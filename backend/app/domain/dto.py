@@ -3,6 +3,8 @@
 §2.3 の正規化ストア形（cards: id辞書 / lanes: cardIds 配列で順序保持）に忠実。
 """
 
+from pydantic import Field
+
 from app.domain.models import (
     Artifact,
     Author,
@@ -69,6 +71,33 @@ class ChatMessageCreate(CamelModel):
     text: str
 
 
+class ChatSendRequest(CamelModel):
+    """POST /tasks/:id/chat の実リクエスト（#11）。送信者は常に human。"""
+
+    text: str
+
+
+# ---- 壁打ち → 分解（§1.6 / §5.3 confirmBreakdown, #11） ----
+class BreakdownConfirmItem(CamelModel):
+    """confirmBreakdown の1項目（クライアントが subtask.proposal の候補を送り返す）。"""
+
+    title: str
+    owner: Owner  # ai → queued（先頭のみ ai_work）/ human → you_todo
+
+
+class BreakdownConfirmRequest(CamelModel):
+    """POST /tasks/:id/breakdown/confirm（1件以上）。"""
+
+    subtasks: list[BreakdownConfirmItem] = Field(min_length=1)
+
+
+class BreakdownConfirmResponse(CamelModel):
+    """confirmBreakdown の応答（親は childIds 込み・子は生成順）。"""
+
+    parent: Task
+    children: list[Task]
+
+
 # ---- 成果物 ----
 class ArtifactResponse(CamelModel):
     """GET /tasks/:id/artifacts（版の一覧。最大 version が最新）。"""
@@ -125,6 +154,17 @@ class SubtaskProposal(CamelModel):
     title: str
     owner: Owner  # AIが実行可能なら ai、人の判断/作業が必須なら human
     rationale: str | None = None
+
+
+class SubtaskProposalEvent(CamelModel):
+    """subtask.proposal イベントの payload（#11）。
+
+    候補はサーバ側に永続化しない。SSE で届いた候補をクライアントが保持し、
+    confirmBreakdown 時に POST /tasks/:id/breakdown/confirm へ送り返す。
+    """
+
+    task_id: str
+    subtasks: list[SubtaskProposal]
 
 
 class RuleProposalDto(CamelModel):

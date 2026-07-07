@@ -9,9 +9,9 @@ from fastapi import APIRouter, HTTPException
 from app.db import get_pool
 from app.domain.dto import ArtifactCreate, ArtifactResponse
 from app.domain.models import Artifact
-from app.events import publish_event
+from app.events import ARTIFACT_CREATED, publish_event
 from app.repo import tasks as tasks_repo
-from app.repo.artifacts import ARTIFACT_CREATED, create_artifact, list_artifacts
+from app.repo.artifacts import create_artifact, list_artifacts
 
 router = APIRouter(tags=["artifacts"])
 

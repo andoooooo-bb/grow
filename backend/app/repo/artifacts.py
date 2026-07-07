@@ -11,10 +11,6 @@ import asyncpg
 
 from app.domain.models import Artifact
 
-# 新規イベント種別（#9 で追加）。既存の TASK_UPDATED / COMMENT_CREATED は app.events 参照。
-# payload は Artifact DTO の camelCase dict。
-ARTIFACT_CREATED = "artifact.created"
-
 
 def _row_to_artifact(row: asyncpg.Record, task_human_id: str) -> Artifact:
     return Artifact(

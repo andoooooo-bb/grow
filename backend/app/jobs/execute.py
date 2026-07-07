@@ -28,12 +28,12 @@ from app.db import get_pool
 from app.domain.dto import CommentCreate
 from app.domain.models import AiJobStatus, Author, LaneKey, TaskStatus
 from app.domain.state_machine import can_transition
-from app.events import COMMENT_CREATED, TASK_UPDATED, publish_event
+from app.events import ARTIFACT_CREATED, COMMENT_CREATED, TASK_UPDATED, publish_event
 from app.repo import ai_jobs as ai_jobs_repo
 from app.repo import comments as comments_repo
 from app.repo import rules as rules_repo
 from app.repo import tasks as tasks_repo
-from app.repo.artifacts import ARTIFACT_CREATED, create_artifact
+from app.repo.artifacts import create_artifact
 
 logger = logging.getLogger(__name__)
 
