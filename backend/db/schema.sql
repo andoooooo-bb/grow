@@ -96,6 +96,18 @@ create table rule_applications (   -- どのルールをどのタスクに適用
   applied_at timestamptz not null default now()
 );
 
+-- 手動蒸留での人の採用/却下ログ（§6.4a）。将来の半自動/自動化のお手本データ（#13）
+create table rule_feedback (
+  id uuid primary key default gen_random_uuid(),
+  task_id uuid not null references tasks(id) on delete cascade,
+  action text not null,             -- 'adopt' | 'dismiss'
+  text text not null,
+  scope text not null,
+  tags text[] not null default '{}',
+  confidence text not null,
+  created_at timestamptz not null default now()
+);
+
 create table ai_jobs (
   id uuid primary key default gen_random_uuid(),
   task_id uuid not null references tasks(id) on delete cascade,

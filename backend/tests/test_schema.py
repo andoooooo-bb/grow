@@ -20,6 +20,7 @@ EXPECTED_TABLES = {
     "chat_messages",
     "rules",
     "rule_applications",
+    "rule_feedback",
     "ai_jobs",
     "artifacts",
 }

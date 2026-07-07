@@ -14,7 +14,7 @@ from app.db import get_pool
 from app.domain.dto import AssignAiResponse, CommentCreate
 from app.domain.models import Author, LaneKey, TaskStatus
 from app.domain.state_machine import can_transition
-from app.events import COMMENT_CREATED, TASK_UPDATED, publish_event
+from app.events import COMMENT_CREATED, RULE_UPDATED, TASK_UPDATED, publish_event
 from app.jobs import queue as jobs_queue
 from app.repo import ai_jobs as ai_jobs_repo
 from app.repo import comments as comments_repo
@@ -59,6 +59,13 @@ async def assign_ai(human_id: str) -> AssignAiResponse:
 
         # 4) 適用ルールの applied++ / last_applied_at / rule_applications（§6.3）
         await rules_repo.record_applications(conn, row, rule_rows)
+        # applied++ 後の最新値で Rule DTO を作る（FE の applied 表示同期用, #13）
+        updated_rule_rows = await rules_repo.get_rules_by_uuids(
+            conn, [r["id"] for r in rule_rows]
+        )
+        applied_rules = [
+            await rules_repo.rule_dto_from_row(conn, r) for r in updated_rule_rows
+        ]
 
         # 2) ai_work・progress 0・progress レーン末尾へ（§1.5 step2）
         task = await tasks_repo.apply_patch(
@@ -75,6 +82,9 @@ async def assign_ai(human_id: str) -> AssignAiResponse:
     # SSE 配信と enqueue はコミット後（ジョブは別コネクションで行を読むため）
     publish_event(COMMENT_CREATED, comment.model_dump(mode="json", by_alias=True))
     publish_event(TASK_UPDATED, task.model_dump(mode="json", by_alias=True))
+    # 適用ルールの applied 表示鮮度を FE と同期する（#13。適用件数ぶん配信）
+    for rule in applied_rules:
+        publish_event(RULE_UPDATED, rule.model_dump(mode="json", by_alias=True))
     job_id = str(job_row["id"])
     await jobs_queue.enqueue_job(job_id)
     return AssignAiResponse(job_id=job_id)

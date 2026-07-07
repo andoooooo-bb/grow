@@ -96,9 +96,11 @@ async def test_assign_ai_with_rules(
     finally:
         await conn.close()
 
-    # SSE: comment.created → task.updated（status/progress/laneKey/commentCount 同期）
+    # SSE: comment.created → task.updated → 適用ルールぶんの rule.updated（#13）
     events = drain_events(event_queue)
-    assert [e["type"] for e in events] == ["comment.created", "task.updated"]
+    assert [e["type"] for e in events] == (
+        ["comment.created", "task.updated"] + ["rule.updated"] * 4
+    )
     assert events[0]["payload"]["text"] == START_COMMENT_T104
     task_payload = events[1]["payload"]
     assert task_payload["id"] == "T-104"
@@ -106,6 +108,10 @@ async def test_assign_ai_with_rules(
     assert task_payload["progress"] == 0
     assert task_payload["laneKey"] == "progress"
     assert task_payload["commentCount"] == 1
+    # rule.updated は retrieval 順・applied++ 後の値（applied 表示の同期 #13）
+    rule_payloads = {e["payload"]["id"]: e["payload"] for e in events[2:]}
+    assert set(rule_payloads) == {"K-01", "K-02", "K-03", "K-04"}
+    assert rule_payloads["K-02"]["applied"] == 15
 
 
 async def test_assign_ai_single_rule_wording(

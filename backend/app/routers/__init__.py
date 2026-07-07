@@ -6,7 +6,7 @@
 
 from fastapi import APIRouter
 
-from app.routers import ai, artifacts, board, chat, comments, events, tasks
+from app.routers import ai, artifacts, board, chat, comments, events, rules, tasks
 
 api_router = APIRouter()
 api_router.include_router(board.router)
@@ -16,3 +16,4 @@ api_router.include_router(chat.router)
 api_router.include_router(events.router)
 api_router.include_router(ai.router)
 api_router.include_router(artifacts.router)
+api_router.include_router(rules.router)

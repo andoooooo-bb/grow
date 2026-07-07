@@ -176,3 +176,14 @@ class RuleProposalDto(CamelModel):
     scope: RuleScope
     tags: list[str]
     confidence: Confidence
+    source: str = ""  # 抽出根拠（§7.5。表示は任意なので FE 型には必須で置かない）
+
+
+# ---- 手動蒸留（#13 §6.4a / §5.3 adoptLearn・dismissLearn） ----
+class LearnDecisionRequest(CamelModel):
+    """POST /tasks/:id/learn/adopt・/learn/dismiss の body（候補1件の内容）。"""
+
+    text: str
+    scope: RuleScope
+    tags: list[str]
+    confidence: Confidence

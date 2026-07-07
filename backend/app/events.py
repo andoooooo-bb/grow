@@ -19,6 +19,8 @@ COMMENT_CREATED = "comment.created"  # payload: Comment DTO
 CHAT_MESSAGE_CREATED = "chat.message.created"  # payload: ChatMessage DTO（#11 壁打ち）
 SUBTASK_PROPOSAL = "subtask.proposal"  # payload: SubtaskProposalEvent DTO（#11 分解候補）
 ARTIFACT_CREATED = "artifact.created"  # payload: Artifact DTO（#9 成果物）
+RULE_CREATED = "rule.created"  # payload: Rule DTO（#13 蒸留候補の採用）
+RULE_UPDATED = "rule.updated"  # payload: Rule DTO（#13 昇格・applied++ の同期）
 
 Event = dict[str, Any]
 
