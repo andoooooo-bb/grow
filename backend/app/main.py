@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.routers import api_router
+from app.routers.internal_jobs import router as internal_jobs_router
 
 # リポジトリルート = backend/app/main.py から2階層上。
 # Dockerfile もこの相対配置（/srv/backend, /srv/frontend/dist）を再現している。
@@ -28,6 +29,9 @@ async def healthz() -> dict[str, str]:
 
 # 機能ルーターの拡張点（後続 Wave は app/routers/ 配下に追加する）
 app.include_router(api_router, prefix="/api")
+
+# worker エンドポイント（Cloud Tasks の push ターゲット, §7.2）。/api prefix の外。
+app.include_router(internal_jobs_router)
 
 
 def _mount_spa(application: FastAPI, dist_dir: Path) -> None:

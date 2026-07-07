@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     # ランタイムAIの切替: mock（ローカル・テスト） / gemini（Vertex AI, 本番）
     ai_provider: Literal["mock", "gemini"] = "mock"
 
+    # ジョブランナーの切替（§7.2）: local（asyncio.create_task, ローカル・テスト） /
+    # cloud_tasks（Cloud Tasks → POST {SELF_URL}/internal/jobs/run, 本番）
+    job_runner: Literal["local", "cloud_tasks"] = "local"
+
     # Cloud SQL for PostgreSQL（ローカルは scripts/devdb.sh のエフェメラルDB）
     database_url: str = "postgresql://grow:grow@localhost:54329/grow"
 

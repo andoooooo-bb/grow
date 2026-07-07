@@ -6,10 +6,12 @@
 
 from fastapi import APIRouter
 
-from app.routers import board, comments, events, tasks
+from app.routers import ai, artifacts, board, comments, events, tasks
 
 api_router = APIRouter()
 api_router.include_router(board.router)
 api_router.include_router(tasks.router)
 api_router.include_router(comments.router)
 api_router.include_router(events.router)
+api_router.include_router(ai.router)
+api_router.include_router(artifacts.router)

@@ -77,6 +77,25 @@ class ArtifactResponse(CamelModel):
     artifacts: list[Artifact]
 
 
+class ArtifactCreate(CamelModel):
+    """POST /tasks/:id/artifacts（人の編集を新版として保存, #10 レビュー画面）。"""
+
+    content_md: str
+
+
+# ---- AIジョブ（§7.2） ----
+class AssignAiResponse(CamelModel):
+    """POST /tasks/:id/assign-ai の応答（enqueue したジョブの ID）。"""
+
+    job_id: str
+
+
+class JobRunRequest(CamelModel):
+    """POST /internal/jobs/run（Cloud Tasks / local ランナーのターゲット）。"""
+
+    job_id: str
+
+
 # ---- ルール（ナレッジ） ----
 class RuleCreate(CamelModel):
     """POST /rules（蒸留候補の採用等）。"""
