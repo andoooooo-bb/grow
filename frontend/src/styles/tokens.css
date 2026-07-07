@@ -1,0 +1,187 @@
+/* ============================================================
+ * デザイントークン（§04 · 案B「Signal」— Grow.dc.html 抽出の確定値）
+ * すべての色・寸法・角丸・影・アニメーションはここの CSS 変数を参照する。
+ * ============================================================ */
+
+:root {
+  /* ---- §4.1 カラー: ブランド / セマンティック ---- */
+  --color-teal: #0f9488; /* AIアバター・AIカード左バー・プライマリボタン・進捗バー */
+  --color-teal-dark: #0b7a72; /* AIバッジのテキスト */
+  --color-teal-bright: #2bd6c4; /* 「AI稼働」カウンタのドット（点滅） */
+  --color-teal-light-text: #5fd6c9; /* トップバー「AI稼働」テキスト */
+  --color-teal-bg: #e1f3f1; /* AI/workトーンのバッジ背景・AGENT帯 */
+  --color-teal-bg-soft: #f7fcfb; /* チームルールカード背景 */
+  --color-teal-border: #e0efec; /* チームルールカード枠 */
+
+  --color-amber: #db8b2a; /* 人カード左バー・attentionドット（点滅） */
+  --color-amber-text: #a5701f; /* 人アバター「YK」テキスト */
+  --color-amber-text2: #b5781f; /* attentionバッジのテキスト */
+  --color-amber-bg: #fbe6cd; /* 人アバター背景・「個人」ミニバッジ背景 */
+  --color-amber-bg2: #fcefe0; /* attentionバッジ背景 */
+  --color-amber-light: #f0b66a; /* トップバー「あなたの番」テキスト */
+
+  --color-purple: #5d4eb0; /* 壁打ち系ボタン/見出し・ナレッジ関連・spec強調 */
+  --color-purple-mid: #7a6ad0; /* specトーンのドット */
+  --color-purple-light-text: #c7bff0; /* トップバー「ナレッジ」ボタン文字 */
+  --color-purple-bg: #f1edfb; /* 壁打ちボタン背景・specバッジ背景(薄) */
+  --color-purple-bg2: #ece8fb; /* specバッジ背景 */
+  --color-purple-border: #e3dbf6; /* 壁打ち/提案カードの枠 */
+
+  --color-green: #4aa876; /* 完了カード左バー・doneドット・確度high */
+  --color-green-text: #3a8a5f; /* doneバッジ/「完了にする」テキスト */
+  --color-green-bg: #e9f4ee; /* doneバッジ/「完了にする」背景 */
+  --color-green-border: #d3ebdd; /* 「完了にする」枠 */
+
+  /* ---- §4.1 確度（confidence）ドット ---- */
+  --color-conf-high: #4aa876;
+  --color-conf-med: #db8b2a;
+  --color-conf-low: #c4c9d1;
+
+  /* ---- §4.1 ニュートラル ---- */
+  --color-app-bg: #eef0f3; /* アプリ背景 */
+  --color-topbar-bg: #1f2430; /* トップバー背景 */
+  --color-topbar-divider: #3a4150; /* トップバー区切り線 */
+  --color-topbar-subtext: #8a93a3; /* トップバー副文字 */
+  --color-topbar-avatar-bg: #2c3340; /* トップバー アバター背景 */
+  --color-topbar-avatar-text: #aeb6c2; /* トップバー アバター文字 */
+  --color-surface: #ffffff; /* カード背景 / パネル背景 */
+  --color-card-border: #e6e9ee; /* カード枠 */
+  --color-lane-header-border: #e4e7ec; /* レーンヘッダ枠 */
+  --color-lane-name: #2c333d; /* レーン名 */
+  --color-text-strongest: #222831; /* 最濃テキスト */
+  --color-text-strong: #2a2f38; /* 濃テキスト */
+  --color-text-body: #3a3f48; /* 本文テキスト */
+  --color-text-mid: #555b66; /* 中間テキスト */
+  --color-text-secondary: #7a818b; /* 副次テキスト（ラベル/見出し小） */
+  --color-text-weak: #8a909a; /* 弱テキスト */
+  --color-text-weakest: #9aa0a8; /* 最弱テキスト（メタ） */
+  --color-text-meta: #aab0b8; /* 最弱テキスト（ID） */
+  --color-label-text: #7f858f; /* ラベルチップ文字 */
+  --color-neutral-badge-text: #868c96; /* neutralバッジ 文字 */
+  --color-neutral-badge-dot: #c4c9d1; /* neutralバッジ ドット */
+  --color-divider: #f1f3f5; /* 区切り線（薄） */
+  --color-divider-2: #eef0f3; /* 区切り線（薄・2） */
+  --color-divider-list: #eceef2; /* 区切り線（カード内一覧） */
+  --color-divider-list-2: #f3f1f9; /* 区切り線（カード内一覧・2） */
+  --color-chip-bg: #eef0f3; /* チップ背景 */
+  --color-chip-bg-2: #f1f3f5; /* チップ背景（2） */
+  --color-btn-dark-bg: #1f2430; /* ボタン(ダーク・送信) 背景 */
+  --color-input-border: #dde2e8; /* 入力枠 */
+  --color-dashed-border: #cfd4db; /* 破線ボタン枠 */
+  --color-dot-muted: #cdd2d8; /* コメント数ドット・スクロールバー */
+  --color-progress-track: #e8ebef; /* 進捗バーのトラック */
+  --color-overlay-scrim: rgba(20, 24, 40, 0.42); /* モーダル遮蔽 */
+
+  /* ---- §3.1 トップバーのピル背景 ---- */
+  --color-pill-you-bg: rgba(219, 139, 42, 0.16);
+  --color-pill-ai-bg: rgba(15, 148, 136, 0.18);
+  --color-pill-knowledge-bg: rgba(93, 78, 176, 0.24);
+
+  /* ---- §4.2 タイポグラフィ ---- */
+  --font-ui: 'IBM Plex Sans JP', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+
+  /* ---- §4.3 主要寸法 ---- */
+  --topbar-height: 54px;
+  --lane-width: 272px;
+  --lane-gap: 14px;
+  --board-padding: 18px 20px;
+  --card-padding: 11px 12px 11px 13px;
+  --card-gap: 8px;
+  --card-bar-width: 3px;
+  --drawer-width: 412px;
+  --overlay-width: 720px;
+
+  /* ---- §4.3 角丸 ---- */
+  --radius-overlay: 14px;
+  --radius-card: 8px;
+  --radius-rule-card: 10px;
+  --radius-proposal: 11px;
+  --radius-button: 8px;
+  --radius-button-lg: 9px;
+  --radius-input: 9px;
+  --radius-lane-header: 8px;
+  --radius-badge: 5px;
+  --radius-badge-lg: 6px;
+  --radius-chip: 4px;
+  --radius-minibadge: 4px;
+
+  /* ---- §4.3 影 ---- */
+  --shadow-card: 0 1px 2px rgba(20, 24, 40, 0.05);
+  --shadow-card-hover: 0 5px 16px rgba(20, 24, 40, 0.12);
+  --shadow-drawer: -8px 0 30px rgba(20, 24, 40, 0.06);
+  --shadow-overlay: 0 30px 80px rgba(20, 24, 40, 0.35);
+
+  /* ---- §4.4 アニメーション ---- */
+  --anim-batonpulse: batonpulse 1.4s infinite; /* 稼働中（work） */
+  --anim-batonpulse-attention: batonpulse 1.6s infinite; /* 要対応（attention） */
+  --anim-batonin: batonin 0.22s ease; /* ドロワーのスライドイン */
+  --anim-msgin: msgin 0.2s ease; /* コメント/チャット/提案/オーバーレイの出現 */
+}
+
+/* ---- §4.4 keyframes ---- */
+@keyframes batonpulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.3;
+    transform: scale(0.6);
+  }
+}
+
+@keyframes batonin {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes msgin {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ---- ベーススタイル（プロトタイプ Grow.dc.html と同一） ---- */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--color-app-bg);
+  font-family: var(--font-ui);
+  color: var(--color-text-strong);
+}
+
+::-webkit-scrollbar {
+  height: 10px;
+  width: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-dot-muted);
+  border-radius: 6px;
+  border: 3px solid var(--color-app-bg);
+}

@@ -1,0 +1,44 @@
+// トップバー（§3.1）: ロゴ・ワークスペース表示と、派生カウンタ（§5.1）のピル群。
+// youCount = owner human かつ status≠done / aiCount = ai_work or queued / ruleCount = rules 総数
+
+import {
+  deriveAiCount,
+  deriveRuleCount,
+  deriveYouCount,
+  useBoardStore,
+} from '../../store/board.ts';
+import './TopBar.css';
+
+export function TopBar() {
+  const youCount = useBoardStore((s) => deriveYouCount(s.cards));
+  const aiCount = useBoardStore((s) => deriveAiCount(s.cards));
+  const ruleCount = useBoardStore((s) => deriveRuleCount(s.rules));
+  const openKnowledge = useBoardStore((s) => s.openKnowledge);
+
+  return (
+    <header className="topbar">
+      <div className="topbar__left">
+        <div className="topbar__logo" aria-hidden="true">
+          G
+        </div>
+        <span className="topbar__brand">Grow</span>
+        <span className="topbar__divider" aria-hidden="true" />
+        <span className="topbar__workspace">workspace / 個人</span>
+      </div>
+      <div className="topbar__right">
+        <span className="topbar__pill topbar__pill--you">
+          <span className="topbar__pill-dot topbar__pill-dot--you" aria-hidden="true" />
+          あなたの番 {youCount}
+        </span>
+        <span className="topbar__pill topbar__pill--ai">
+          <span className="topbar__pill-dot topbar__pill-dot--ai" aria-hidden="true" />
+          AI稼働 {aiCount}
+        </span>
+        <button type="button" className="topbar__knowledge" onClick={openKnowledge}>
+          ◈ ナレッジ {ruleCount}
+        </button>
+        <span className="topbar__avatar">YK</span>
+      </div>
+    </header>
+  );
+}

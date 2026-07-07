@@ -1,0 +1,16 @@
+/* ボード（§3.2）: 横スクロール領域（overflow-x:auto） */
+.board {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* 5レーンを gap14px で横並び、padding 18px 20px、高さ100% */
+.board__lanes {
+  display: flex;
+  gap: var(--lane-gap);
+  padding: var(--board-padding);
+  align-items: flex-start;
+  height: 100%;
+}

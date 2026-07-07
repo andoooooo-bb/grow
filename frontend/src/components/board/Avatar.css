@@ -1,0 +1,41 @@
+.avatar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+}
+
+.avatar--ai {
+  background: var(--color-teal);
+  color: #fff;
+}
+
+.avatar--human {
+  background: var(--color-amber-bg);
+  color: var(--color-amber-text);
+}
+
+/* §3.2 カード上段: 18×18, radius5px, 文字8px/700 */
+.avatar--card {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  font-size: 8px;
+}
+
+/* §3.3.2(d) サブタスク行: 17×17（#7 で使用） */
+.avatar--subtask {
+  width: 17px;
+  height: 17px;
+  border-radius: 5px;
+  font-size: 7.5px;
+}
+
+/* §3.3.2(e) アクティビティ: 24×24, radius7px, 文字9px（#7 で使用） */
+.avatar--thread {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  font-size: 9px;
+}

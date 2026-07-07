@@ -1,0 +1,144 @@
+/* カード（§3.2）。flex:none が重要 — これが無いと5枚以上で潰れる（過去バグ）。 */
+.card {
+  flex: none;
+  position: relative;
+  background: var(--color-surface);
+  border: 1px solid var(--color-card-border);
+  border-radius: var(--radius-card);
+  padding: var(--card-padding);
+  display: flex;
+  flex-direction: column;
+  gap: var(--card-gap);
+  box-shadow: var(--shadow-card);
+  cursor: pointer;
+  overflow: hidden;
+  transition:
+    box-shadow 0.15s,
+    transform 0.12s;
+}
+
+.card:hover {
+  box-shadow: var(--shadow-card-hover);
+  transform: translateY(-1px);
+}
+
+/* 左端の色バー 3px（§3.2: ai=#0f9488 / human=#db8b2a / done=#4aa876） */
+.card__bar {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: var(--card-bar-width);
+}
+
+.card__bar--ai {
+  background: var(--color-teal);
+}
+
+.card__bar--human {
+  background: var(--color-amber);
+}
+
+.card__bar--done {
+  background: var(--color-green);
+}
+
+/* 上段: アバター18px＋タスクID mono ／ 右にコメント数 */
+.card__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.card__who {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.card__id {
+  font-size: 10px;
+  color: var(--color-text-meta);
+  font-family: var(--font-mono);
+}
+
+.card__comments {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--color-text-weakest);
+  font-family: var(--font-mono);
+}
+
+.card__comments-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--color-dot-muted);
+}
+
+/* タイトル 12.5px/500 */
+.card__title {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--color-text-strong);
+  line-height: 1.5;
+}
+
+/* 親タグ（サブタスクのみ） */
+.card__parent {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  align-self: flex-start;
+  font-size: 9.5px;
+  color: var(--color-text-weak);
+  background: var(--color-chip-bg-2);
+  border-radius: var(--radius-badge);
+  padding: 2px 7px;
+}
+
+/* 進捗バー / サブタスク進捗（§3.2: 9.5px mono ＋ 4px track） */
+.card__meter {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.card__meter-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9.5px;
+  color: var(--color-text-weak);
+  font-family: var(--font-mono);
+}
+
+.card__meter-track {
+  height: 4px;
+  background: var(--color-progress-track);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.card__meter-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--color-teal);
+}
+
+/* ラベルチップ mono */
+.card__labels {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.card__label {
+  font-size: 9.5px;
+  color: var(--color-label-text);
+  background: var(--color-chip-bg);
+  border-radius: var(--radius-chip);
+  padding: 2px 6px;
+  font-family: var(--font-mono);
+}

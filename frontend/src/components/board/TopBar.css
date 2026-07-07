@@ -1,0 +1,129 @@
+/* トップバー（§3.1）: 高さ54px、背景#1f2430、左右padding 20px、space-between */
+.topbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--topbar-height);
+  padding: 0 20px;
+  background: var(--color-topbar-bg);
+}
+
+/* 左グループ（gap 10px, 中央揃え） */
+.topbar__left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* ロゴマーク: 26×26, radius 7px, 背景ティール, 白文字 14px/700 */
+.topbar__logo {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  background: var(--color-teal);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* "Grow" 15px/700 白, letter-spacing -.01em */
+.topbar__brand {
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: -0.01em;
+}
+
+/* 縦区切り線 1×15px */
+.topbar__divider {
+  width: 1px;
+  height: 15px;
+  background: var(--color-topbar-divider);
+}
+
+/* "workspace / 個人" 12px, mono */
+.topbar__workspace {
+  font-size: 12px;
+  color: var(--color-topbar-subtext);
+  font-family: var(--font-mono);
+}
+
+/* 右グループ（gap 8px, 中央揃え） */
+.topbar__right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* カウンタのピル共通: 11px/600, padding 5px 11px, radius 7px, 先頭ドット6px */
+.topbar__pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 5px 11px;
+  border-radius: 7px;
+}
+
+.topbar__pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+/* 「あなたの番 N」: #f0b66a on rgba(219,139,42,.16)。ドットは点滅なし */
+.topbar__pill--you {
+  color: var(--color-amber-light);
+  background: var(--color-pill-you-bg);
+}
+
+.topbar__pill-dot--you {
+  background: var(--color-amber);
+}
+
+/* 「AI稼働 N」: #5fd6c9 on rgba(15,148,136,.18)。ドットは batonpulse 点滅 */
+.topbar__pill--ai {
+  color: var(--color-teal-light-text);
+  background: var(--color-pill-ai-bg);
+}
+
+.topbar__pill-dot--ai {
+  background: var(--color-teal-bright);
+  animation: var(--anim-batonpulse);
+}
+
+/* 「◈ ナレッジ N」ボタン: #c7bff0 on rgba(93,78,176,.24) */
+.topbar__knowledge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-purple-light-text);
+  background: var(--color-pill-knowledge-bg);
+  padding: 5px 11px;
+  border-radius: 7px;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+/* アバター: 28×28, radius 8px, 背景#2c3340, 文字#aeb6c2 11px/600 "YK" */
+.topbar__avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--color-topbar-avatar-bg);
+  color: var(--color-topbar-avatar-text);
+  font-size: 11px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 4px;
+}
