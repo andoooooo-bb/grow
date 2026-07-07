@@ -1,0 +1,211 @@
+"""MockProvider — プロトタイプの固定応答を移植した決定的モック（§7.0 / §7.7）。
+
+ネットワーク不要・費用ゼロ・決定的（同じ入力には常に同じ出力）。
+スクリプト応答の出典:
+- 壁打ち文言: §7.4a / 05 §5.3 / プロト `greetings[id]`・`sendChat`
+- 分解候補: 02 §2.5 / プロト `proposals[id]`
+- 蒸留候補: 02 §2.5 / プロト `learnProposals[id]`
+- execute: §7.3 の確定ユースケース「調査 → Markdown レポート化」
+usage は入力・出力の文字数から決定的に算出する（文字数 // 4、最低 1）。
+"""
+
+import json
+
+from app.ai.provider import (
+    AiProvider,
+    ChatReplyResult,
+    ExecuteResult,
+    ProposeRulesResult,
+    ProposeSubtasksResult,
+    RuleProposal,
+    SubtaskProposal,
+    TokenUsage,
+)
+
+# --- 壁打ち文言（§7.4a / 05 §5.3 / プロト greetings・sendChat） ---
+
+GREETING_T130 = (
+    "「ポートフォリオサイトのリニューアル」ですね。分解の前に確認させてください。\n"
+    "① 公開したい時期は？\n"
+    "② 既存サイトの資産は流用しますか？\n"
+    "③ いちばん見せたい実績は？"
+)
+GREETING_GENERIC = (
+    "このタスクですね。進め方を一緒に詰めましょう。やりたいこと・前提を教えてください。"
+)
+CHAT_FOLLOWUP = (
+    "ありがとうございます、イメージできました。"
+    "いただいた前提をふまえ、次のように分解するのはいかがでしょう。"
+)
+
+# --- 分解候補（02 §2.5 / プロト proposals） ---
+
+SUBTASKS_T130 = [
+    SubtaskProposal(title="情報設計・サイトマップ作成", owner="ai"),
+    SubtaskProposal(title="ワイヤーフレーム作成", owner="ai"),
+    SubtaskProposal(
+        title="掲載する実績コンテンツの選定",
+        owner="human",
+        rationale="掲載内容の取捨選択は本人の意思決定が必要なため",
+    ),
+    SubtaskProposal(
+        title="デザイン方向性の決定",
+        owner="human",
+        rationale="好み・ブランドに関わる判断は人が行うため",
+    ),
+    SubtaskProposal(title="コーディング・実装", owner="ai"),
+]
+SUBTASKS_GENERIC = [
+    SubtaskProposal(title="要件・前提の整理", owner="ai"),
+    SubtaskProposal(title="たたき台の作成", owner="ai"),
+    SubtaskProposal(
+        title="内容の確認・決定", owner="human", rationale="最終的な判断は人が行うため"
+    ),
+    SubtaskProposal(title="仕上げ", owner="ai"),
+]
+
+# --- 蒸留候補（02 §2.5 / プロト learnProposals） ---
+
+RULES_T098 = [
+    RuleProposal(
+        text="競合ごとにセクションを分け、末尾に横断比較表を置くと差し戻しが減る",
+        scope="personal",
+        tags=["調査"],
+        confidence="med",
+        source="T-098 のレビューで差し戻しが繰り返された",
+    ),
+    RuleProposal(
+        text="料金は必ず税抜/税込を明記する",
+        scope="personal",
+        tags=["調査", "経理"],
+        confidence="med",
+        source="T-098 で同じ修正指示が2回あった",
+    ),
+]
+RULES_T091 = [
+    RuleProposal(
+        text="確定申告サマリーは控除候補を別セクションで先に提示する",
+        scope="personal",
+        tags=["経理"],
+        confidence="med",
+        source="T-091 のレビュー指摘から抽出",
+    ),
+]
+
+
+class MockProvider(AiProvider):
+    """プロトの固定応答をそのまま返す決定的プロバイダ（費用ゼロ・ネットワーク不要）。"""
+
+    async def execute(
+        self, task: dict, rules: list[dict], comments: list[dict]
+    ) -> ExecuteResult:
+        content_md = self._build_report(task, rules)
+        return ExecuteResult(
+            content_md=content_md,
+            usage=self._usage(content_md, task, rules, comments),
+        )
+
+    async def propose_subtasks(
+        self, task: dict, chat: list[dict], rules: list[dict]
+    ) -> ProposeSubtasksResult:
+        subtasks = SUBTASKS_T130 if task.get("humanId") == "T-130" else SUBTASKS_GENERIC
+        return ProposeSubtasksResult(
+            subtasks=list(subtasks),
+            usage=self._usage(str(subtasks), task, chat, rules),
+        )
+
+    async def propose_rules(
+        self, task: dict, comments: list[dict], chat: list[dict]
+    ) -> ProposeRulesResult:
+        human_id = task.get("humanId")
+        if human_id == "T-098":
+            proposals = list(RULES_T098)
+        elif human_id == "T-091":
+            proposals = list(RULES_T091)
+        else:
+            proposals = [
+                RuleProposal(
+                    text="このタスクで繰り返した指示を、今後の既定の進め方にする",
+                    scope="personal",
+                    tags=list(task.get("labels") or []),
+                    confidence="low",
+                    source=f"{human_id or '不明なタスク'} の履歴から抽出",
+                )
+            ]
+        return ProposeRulesResult(
+            rules=proposals,
+            usage=self._usage(str(proposals), task, comments, chat),
+        )
+
+    async def chat_reply(
+        self, task: dict, chat: list[dict], rules: list[dict]
+    ) -> ChatReplyResult:
+        if not chat:
+            if task.get("humanId") == "T-130":
+                text = GREETING_T130
+            else:
+                text = GREETING_GENERIC
+        else:
+            text = CHAT_FOLLOWUP
+        return ChatReplyResult(text=text, usage=self._usage(text, task, chat, rules))
+
+    # --- 内部ヘルパ ---
+
+    @staticmethod
+    def _usage(output_text: str, *inputs: object) -> TokenUsage:
+        """入力・出力の文字数からダミーのトークン数を決定的に算出する（文字数 // 4）。"""
+        payload = json.dumps(inputs, ensure_ascii=False, sort_keys=True, default=str)
+        return TokenUsage(
+            input_tokens=max(1, len(payload) // 4),
+            output_tokens=max(1, len(output_text) // 4),
+        )
+
+    @staticmethod
+    def _build_report(task: dict, rules: list[dict]) -> str:
+        """確定ユースケース「調査 → Markdown レポート化」の固定レポート（§7.3 運用）。
+
+        構成: 冒頭3行サマリー → 本文セクション → 比較表 → 出典URL。
+        task の title と、渡された rules のテキストを織り込む。
+        """
+        title = task.get("title", "")
+        lines = [
+            f"# {title} — 調査レポート",
+            "",
+            "## サマリー",
+            f"- 「{title}」について公開情報を調査し、要点を本レポートにまとめた。",
+            "- 主要な候補を評価軸ごとに整理し、末尾の比較表で横断比較した。",
+            "- 判断の根拠となる出典 URL をレポート末尾に明記した。",
+            "",
+        ]
+        rule_texts = [r.get("text", "") for r in rules if r.get("text")]
+        if rule_texts:
+            lines += [
+                "## 適用ルール",
+                *[f"- {text}" for text in rule_texts],
+                "",
+            ]
+        lines += [
+            "## 調査結果",
+            "",
+            "### 背景と目的",
+            f"「{title}」の判断材料とするため、主要な選択肢を横断的に調査した。",
+            "",
+            "### 要点",
+            "1. 候補 A は機能面で最も充実しているが、コストが高い。",
+            "2. 候補 B は機能とコストのバランスに優れ、第一候補になり得る。",
+            "3. 候補 C は導入実績が多く、サポート体制が充実している。",
+            "",
+            "## 比較表",
+            "",
+            "| 評価軸 | 候補 A | 候補 B | 候補 C |",
+            "| --- | --- | --- | --- |",
+            "| 機能 | ◎ | ○ | ○ |",
+            "| コスト | △ | ◎ | ○ |",
+            "| サポート | ○ | ○ | ◎ |",
+            "",
+            "## 出典URL",
+            "- https://example.com/research/source-1",
+            "- https://example.com/research/source-2",
+            "- https://example.com/research/source-3",
+        ]
+        return "\n".join(lines)
