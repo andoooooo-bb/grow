@@ -22,11 +22,27 @@
   transform: translateY(-1px);
 }
 
-/* ドラッグ中の最小限の視覚（#8: 減光＋前面表示。transform はインラインで移動） */
-.card--dragging {
-  opacity: 0.5;
-  z-index: 10;
+/* ドラッグ中: 元カードはその場にプレースホルダとして残す（減光）。
+   実際に動くのは DragOverlay の浮遊コピー（#8 clipping バグ修正）。 */
+.card--placeholder {
+  opacity: 0.4;
   transition: none;
+}
+
+/* DragOverlay の浮遊コピー: ポータルで最前面に描画されるため
+   レーンの overflow に切り取られない。掴んでいる感を影と傾きで表現。 */
+.card--overlay {
+  cursor: grabbing;
+  box-shadow: var(--shadow-card-hover);
+  transform: rotate(1.5deg);
+  /* レーン内カードの実幅（レーン272px − lane__cards 左右 padding 2px×2） */
+  width: calc(var(--lane-width) - 4px);
+}
+
+.card--overlay:hover {
+  /* オーバーレイは hover の浮きを打ち消す（掴み中は固定の見た目） */
+  transform: rotate(1.5deg);
+  box-shadow: var(--shadow-card-hover);
 }
 
 /* 左端の色バー 3px（§3.2: ai=#0f9488 / human=#db8b2a / done=#4aa876） */

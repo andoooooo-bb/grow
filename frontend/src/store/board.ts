@@ -35,6 +35,7 @@ import type {
   Rule,
   RuleProposal,
   Task,
+  TaskStatus,
 } from '../types/domain.ts';
 import { STATUS_META } from '../types/domain.ts';
 
@@ -360,12 +361,22 @@ export const useBoardStore = create<BoardStore>()((set, get) => ({
     if (task === undefined) return;
     if (task.laneKey === toLaneKey) return; // 同一レーンへのドロップは no-op
 
-    // §00 #7: 完了レーンへドロップ = done 化のみ自動整合。それ以外は status を変えない。
+    // §00 #7: 完了レーンへドロップ = done 化のみ自動整合。
+    // 加えて、完了レーンから引き出したら「あなたの作業待ち」(you_todo) へ再オープン
+    // （done→他レーンで status=done のまま残る矛盾を解消。ボールは人へ戻す）。
     const toDone = toLaneKey === 'done';
-    if (toDone && !canTransition(task.status, 'done')) {
-      // クライアント事前チェック（§5.2）: API を呼ばず即フィードバック
+    const reopen = !toDone && task.status === 'done'; // done レーンから引き出し
+    // 遷移可否のクライアント事前チェック（§5.2）: API を呼ばず即フィードバック
+    const nextStatus: TaskStatus | null = toDone
+      ? 'done'
+      : reopen
+        ? 'you_todo'
+        : null;
+    if (nextStatus !== null && !canTransition(task.status, nextStatus)) {
       set({
-        boardError: `「${STATUS_META[task.status].label}」のカードは完了レーンへ移動できません`,
+        boardError: `「${STATUS_META[task.status].label}」のカードは${
+          toDone ? '完了レーンへ移動' : '再オープン'
+        }できません`,
       });
       return;
     }
@@ -378,16 +389,18 @@ export const useBoardStore = create<BoardStore>()((set, get) => ({
     const targetLane = s.lanes.find((lane) => lane.key === toLaneKey);
     const orderInLane =
       targetLane?.cardIds.filter((id) => id !== taskId).length ?? 0;
-    const optimistic: Task = toDone
-      ? { ...task, laneKey: toLaneKey, orderInLane, status: 'done', progress: undefined }
-      : { ...task, laneKey: toLaneKey, orderInLane };
+    const optimistic: Task =
+      nextStatus !== null
+        ? { ...task, laneKey: toLaneKey, orderInLane, status: nextStatus, progress: undefined }
+        : { ...task, laneKey: toLaneKey, orderInLane };
     get().applyTaskUpdated(optimistic);
     set({ boardError: null });
 
     try {
-      const patch: TaskPatch = toDone
-        ? { laneKey: 'done', status: 'done', progress: null }
-        : { laneKey: toLaneKey };
+      const patch: TaskPatch =
+        nextStatus !== null
+          ? { laneKey: toLaneKey, status: nextStatus, progress: null }
+          : { laneKey: toLaneKey };
       const updated = await patchTask(taskId, patch);
       get().applyTaskUpdated(updated); // 成功レスポンスで確定
     } catch {

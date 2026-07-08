@@ -327,6 +327,34 @@ describe('move（#8: §5.3 / §5.2 / §5.4）', () => {
     expect(s.cards).toEqual(before.cards);
     expect(s.boardError).toBe('カードの移動に失敗しました');
   });
+
+  it('完了レーンから引き出し: done→他レーンは you_todo へ再オープンして PATCH', async () => {
+    // T-080（done, 完了レーン）→ 進行中レーンへ引き出し → you_todo に再オープン
+    const server: Task = {
+      ...boardFixture().cards['T-080'],
+      laneKey: 'progress',
+      status: 'you_todo',
+      progress: undefined,
+      orderInLane: 2,
+    };
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        jsonResponse(200, server),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await useBoardStore.getState().move('T-080', 'progress');
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      laneKey: 'progress',
+      status: 'you_todo',
+      progress: null,
+    });
+    const s = useBoardStore.getState();
+    expect(s.cards['T-080'].status).toBe('you_todo');
+    expect(laneIds('progress')).toContain('T-080');
+    expect(laneIds('done')).not.toContain('T-080');
+  });
 });
 
 describe('addCard（#8: §5.3）', () => {
