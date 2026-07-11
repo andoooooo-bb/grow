@@ -268,6 +268,42 @@ async def test_execute_without_grounding_keeps_text_as_is(patch_client):
     assert "## 出典" not in result.content_md
 
 
+async def test_execute_policy_disables_google_search(patch_client):
+    """#21 allowWebSearch=False: 検索ツールを付けず、system に検索不可指示を注入する。"""
+    fake = patch_client(_text_response("# レポート"))
+    await GeminiProvider().execute(_task(), [], [], policy={"allowWebSearch": False})
+
+    call = fake.models.calls[0]
+    assert call["config"].tools is None  # Google Search ツールを付けない
+    system = call["config"].system_instruction
+    assert "- Web検索は使用不可。既知情報のみで作成し、要確認事項を明記する。" in system
+    user_text = call["contents"][0].parts[0].text
+    assert "Google 検索" not in user_text
+    assert "要確認事項" in user_text
+
+
+async def test_execute_policy_defaults_keep_google_search(patch_client):
+    """policy 省略キー（allowWebSearch なし）は既定=検索可のまま。"""
+    fake = patch_client(_text_response("# レポート"))
+    await GeminiProvider().execute(_task(), [], [], policy={"costCapUsd": 3.0})
+    tools = fake.models.calls[0]["config"].tools
+    assert any(t.google_search is not None for t in tools)
+
+
+async def test_execute_plan_only_switches_to_plan_prompt(patch_client):
+    """#21 L0: plan_only=True はプラン生成のユーザーメッセージ＋system 指示に切り替わる。"""
+    fake = patch_client(_text_response("## 実行プラン"))
+    result = await GeminiProvider().execute(_task(), [], [], plan_only=True)
+
+    call = fake.models.calls[0]
+    user_text = call["contents"][0].parts[0].text
+    assert "まだ実行しないでください" in user_text
+    assert "実行プラン" in user_text
+    system = call["config"].system_instruction
+    assert "- 今回は「実行プラン」の提案のみを行う。成果物の本文は作成しない。" in system
+    assert result.content_md == "## 実行プラン"
+
+
 async def test_execute_raises_on_empty_response(patch_client):
     patch_client(types.GenerateContentResponse(candidates=[]))
     with pytest.raises(GeminiResponseError):

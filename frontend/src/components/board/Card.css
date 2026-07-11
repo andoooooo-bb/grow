@@ -92,6 +92,34 @@
   gap: 8px;
 }
 
+/* #21: オートノミーのミニバッジ（L1=既定は非表示）。AGENT_ROLE 色に馴染むトーン:
+   L0=パープル（計画） / L2=ティール（承認後自動） / L3=ダーク（全自動） */
+.card__autonomy {
+  display: inline-flex;
+  align-items: center;
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+}
+
+.card__autonomy--l0 {
+  color: var(--color-purple);
+  background: var(--color-purple-bg2);
+}
+
+.card__autonomy--l2 {
+  color: var(--color-teal-dark);
+  background: var(--color-teal-bg);
+}
+
+.card__autonomy--l3 {
+  color: #fff;
+  background: var(--color-btn-dark-bg);
+}
+
 /* #20: 適用予定ルール数の ◈N ミニチップ（紫 = ナレッジ由来。0件は非表示） */
 .card__rules {
   display: inline-flex;

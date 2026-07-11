@@ -10,7 +10,7 @@ from typing import Any
 import asyncpg
 
 from app.domain.dto import BoardResponse, LaneDto, TaskCreate
-from app.domain.models import Rule, Task
+from app.domain.models import Rule, Task, TaskPolicy
 
 
 class InvalidParentError(Exception):
@@ -19,6 +19,14 @@ class InvalidParentError(Exception):
 
 def _iso(value: Any) -> str | None:
     return value.isoformat() if value is not None else None
+
+
+def policy_from_row(row: asyncpg.Record) -> TaskPolicy:
+    """tasks.policy（jsonb）を TaskPolicy へ変換する（#21）。
+
+    省略キーは既定値（Web検索可・コスト上限なし）。#22 指揮者もここから権限を読む。
+    """
+    return TaskPolicy.model_validate_json(row["policy"])
 
 
 def _row_to_task(
@@ -41,6 +49,8 @@ def _row_to_task(
         progress=row["progress"],
         parent_id=parent_human_id,
         child_ids=child_human_ids if child_human_ids else None,
+        autonomy=row["autonomy"],
+        policy=policy_from_row(row),
         comment_count=comment_count,
         created_at=_iso(row["created_at"]),
         updated_at=_iso(row["updated_at"]),
@@ -253,6 +263,11 @@ async def apply_patch(
         updates["progress"] = fields["progress"]  # None は明示クリア（§5.6 不変条件）
     if "parent_id" in fields:
         updates["parent_id"] = await _resolve_parent(conn, row, fields["parent_id"])
+    if fields.get("autonomy") is not None:
+        updates["autonomy"] = str(fields["autonomy"])  # #21 L0-L3 ダイヤル
+    if fields.get("policy") is not None:
+        # #21 行動範囲ポリシーは全体置換（jsonb には camelCase で保存 = API 表現と同形）
+        updates["policy"] = fields["policy"].model_dump_json(by_alias=True)
 
     lane_specified = fields.get("lane_key") is not None
     order_specified = fields.get("order_in_lane") is not None

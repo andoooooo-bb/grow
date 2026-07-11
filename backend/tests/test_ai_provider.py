@@ -186,6 +186,51 @@ async def test_execute_weaves_rule_texts_into_report(provider: MockProvider):
     _assert_positive_usage(result.usage)
 
 
+# --- execute のポリシー分岐（#21: allowWebSearch / plan_only） ---
+
+
+async def test_execute_without_web_search_notes_verification_items(provider: MockProvider):
+    """allowWebSearch=False: 出典URLの代わりに要確認事項を明記する（決定的に文言変化）。"""
+    task = _task("T-104", "競合SaaS 5社の料金プランを調査", ["仕事", "調査"])
+    result = await provider.execute(
+        task, rules=[], comments=[], policy={"allowWebSearch": False}
+    )
+    md = result.content_md
+    assert "## 要確認事項" in md
+    assert "Web検索は使用不可のため、既知情報のみで作成した。" in md
+    assert "ポリシーによりWeb検索は使用せず、既知情報のみで作成した。" in md
+    assert "## 出典URL" not in md
+
+
+async def test_execute_default_policy_keeps_sources(provider: MockProvider):
+    """policy 省略・allowWebSearch 省略時は既定（検索可）で出典URLを出す。"""
+    task = _task("T-104", "競合SaaS 5社の料金プランを調査", ["仕事", "調査"])
+    default = await provider.execute(task, rules=[], comments=[])
+    omitted = await provider.execute(task, rules=[], comments=[], policy={"costCapUsd": 3.0})
+    for result in (default, omitted):
+        assert "## 出典URL" in result.content_md
+        assert "## 要確認事項" not in result.content_md
+
+
+async def test_execute_plan_only_returns_plan_not_report(provider: MockProvider):
+    """plan_only=True（L0）: 実行プランだけを返し、成果物本文（比較表）は作らない。"""
+    task = _task("T-104", "競合SaaS 5社の料金プランを調査", ["仕事", "調査"])
+    result = await provider.execute(task, rules=[], comments=[], plan_only=True)
+    md = result.content_md
+    assert "実行プラン" in md
+    assert "## 進め方（案）" in md
+    assert "## 比較表" not in md
+    assert "調査レポート" not in md
+    _assert_positive_usage(result.usage)
+
+
+async def test_execute_plan_only_weaves_rule_texts(provider: MockProvider):
+    rules = [{"id": "K-01", "text": "レポートは結論→根拠の順で書き、冒頭に3行サマリーを置く"}]
+    result = await provider.execute(_task(), rules=rules, comments=[], plan_only=True)
+    assert "## 適用ルール" in result.content_md
+    assert "レポートは結論→根拠の順で書き、冒頭に3行サマリーを置く" in result.content_md
+
+
 # --- 決定性（同じ入力 → 同じ出力）と usage ---
 
 

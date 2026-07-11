@@ -29,6 +29,18 @@ def job_from_row(row: asyncpg.Record, task_human_id: str) -> AiJob:
     )
 
 
+async def total_cost_usd(conn: asyncpg.Connection, task_id: object) -> float:
+    """タスクの累計コスト（sum(ai_jobs.cost_usd)。null は 0 扱い）。
+
+    #21 コスト上限（assign-ai の enqueue 前チェック）と #22 指揮者の予算判断が読む。
+    task_id は tasks.id（UUID）。
+    """
+    value = await conn.fetchval(
+        "select coalesce(sum(cost_usd), 0) from ai_jobs where task_id = $1", task_id
+    )
+    return float(value)
+
+
 async def list_jobs(conn: asyncpg.Connection, task_row: asyncpg.Record) -> list[AiJob]:
     """タスクのジョブを created_at 昇順で返す（#19 リレー・タイムラインの履歴）。"""
     rows = await conn.fetch(

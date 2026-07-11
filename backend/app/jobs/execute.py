@@ -26,7 +26,14 @@ import asyncpg
 from app.ai import get_provider
 from app.db import get_pool
 from app.domain.dto import CommentCreate
-from app.domain.models import AgentRole, AiJobStatus, Author, LaneKey, TaskStatus
+from app.domain.models import (
+    AgentRole,
+    AiJobStatus,
+    Author,
+    AutonomyLevel,
+    LaneKey,
+    TaskStatus,
+)
 from app.domain.state_machine import can_transition
 from app.events import ARTIFACT_CREATED, COMMENT_CREATED, TASK_UPDATED, publish_event
 from app.repo import ai_jobs as ai_jobs_repo
@@ -52,6 +59,14 @@ COMPLETE_COMMENT = "完了しました。学習済みのルールに沿って仕
 FAILURE_COMMENT_TEMPLATE = (
     "作業中にエラーが発生しました。内容を確認のうえ、再度お任せください。（理由: {reason}）"
 )
+# --- #21 オートノミー分岐のコメント文言 ---
+# L0: 実行プランだけを作り、成果物は作らず人へハンドオフする（停止理由の明示）
+PLAN_HANDOFF_COMMENT_TEMPLATE = (
+    "実行プランを作成しました。オートノミーL0（計画のみ）のため、実行せずここで停止します。"
+    "プランを確認のうえ、あなたが進めるか、レベルを上げて再度お任せください。\n\n{plan}"
+)
+# L3: done まで連鎖適用したことを事後レビュー可能な形で明示する
+AUTO_APPROVE_COMMENT = "ポリシーL3により自動承認しました。内容は事後確認できます。"
 
 
 class JobNotFoundError(Exception):
@@ -144,6 +159,9 @@ async def _execute_attempt(job_id: str) -> None:
         publish_event(TASK_UPDATED, task.model_dump(mode="json", by_alias=True))
 
     # 2) AiProvider.execute（retrieval 済みルール＋コメント履歴を注入, §7.3）
+    #    #21: タスクのオートノミー（L0-L3）と行動範囲ポリシーを読み、provider へ渡す
+    autonomy = AutonomyLevel(task_row["autonomy"])
+    policy = tasks_repo.policy_from_row(task_row)
     await asyncio.sleep(COMPLETE_DELAY_SEC)
     async with pool.acquire() as conn:
         rule_rows = await rules_repo.get_rules_by_uuids(conn, job_row["applied_rule_ids"])
@@ -152,9 +170,20 @@ async def _execute_attempt(job_id: str) -> None:
         _task_prompt_dict(task_row),
         [rules_repo.rule_prompt_dict(row) for row in rule_rows],
         [{"who": c.author.value, "text": c.text} for c in history],
+        policy=policy.model_dump(by_alias=True),
+        plan_only=autonomy is AutonomyLevel.L0,
     )
 
-    # 3) artifacts 新版保存 → you_review へハンドオフ → succeeded（1トランザクション）
+    # 3) 完了処理はオートノミーで分岐する（#21）:
+    #    - L0: 成果物は作らず、実行プランをコメントで渡して you_todo へハンドオフ
+    #    - L1: 現行どおり you_review へ（下書きまで）
+    #    - L2: 現段階では L1 と同挙動。#22 指揮者が「プラン承認後は完了まで自動」を
+    #      実現する（指揮者は you_review 到達時に autonomy=L2 を見て自動リレーへ接続）
+    #    - L3: you_review 適用後、同一トランザクションで done まで連鎖適用（自動承認）
+    if autonomy is AutonomyLevel.L0:
+        await _handoff_plan(job_id, task_row, result)
+        return
+
     async with pool.acquire() as conn:
         async with conn.transaction():
             row = await tasks_repo.get_task_row(conn, task_row["human_id"], for_update=True)
@@ -183,6 +212,36 @@ async def _execute_attempt(job_id: str) -> None:
                     "lane_key": LaneKey.REVIEW,
                 },
             )
+            # L3（#21）: ai_work→you_review→done を連鎖適用（ALLOWED_TRANSITIONS は不変。
+            # you_review→done は §5.6 の「承認」遷移をそのまま使う）
+            auto_comment = None
+            done_task = None
+            if autonomy is AutonomyLevel.L3:
+                row = await tasks_repo.get_task_row(
+                    conn, task_row["human_id"], for_update=True
+                )
+                if not can_transition(TaskStatus(row["status"]), TaskStatus.DONE):
+                    raise RuntimeError(
+                        f"invalid transition on auto-approve: {row['status']} -> done"
+                    )
+                auto_comment = await comments_repo.create_comment(
+                    conn,
+                    row,
+                    CommentCreate(
+                        author=Author.AI,
+                        text=AUTO_APPROVE_COMMENT,
+                        agent_role=AgentRole.EXECUTOR,  # 自動承認も実行AIの名義（#19）
+                    ),
+                )
+                done_task = await tasks_repo.apply_patch(
+                    conn,
+                    row,
+                    {
+                        "status": TaskStatus.DONE,
+                        "progress": None,
+                        "lane_key": LaneKey.DONE,
+                    },
+                )
             # mock は usage をそのまま記録し cost 0.0（実コスト算定は Gemini 実装 #15 で）
             await ai_jobs_repo.mark_succeeded(
                 conn,
@@ -192,6 +251,52 @@ async def _execute_attempt(job_id: str) -> None:
                 cost_usd=0.0,
             )
     publish_event(ARTIFACT_CREATED, artifact.model_dump(mode="json", by_alias=True))
+    publish_event(COMMENT_CREATED, comment.model_dump(mode="json", by_alias=True))
+    publish_event(TASK_UPDATED, task.model_dump(mode="json", by_alias=True))
+    if auto_comment is not None and done_task is not None:
+        # L3 の連鎖（you_review → done）も順に配信し、FEフィードに経緯を残す
+        publish_event(COMMENT_CREATED, auto_comment.model_dump(mode="json", by_alias=True))
+        publish_event(TASK_UPDATED, done_task.model_dump(mode="json", by_alias=True))
+
+
+# ---- L0: 実行プランを渡して人へハンドオフ（#21） -----------------------------------
+
+
+async def _handoff_plan(job_id: str, task_row: asyncpg.Record, result: Any) -> None:
+    """L0（計画のみ）: 成果物は作らず、プランをコメント投稿して you_todo へ渡す。
+
+    ai_work→you_todo は §5.6 で許可済みの遷移（§7.2 の失敗ハンドオフと同じ）。
+    レーンは動かさない（進行中のまま「あなたの作業待ち」= 人のボール）。
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await tasks_repo.get_task_row(conn, task_row["human_id"], for_update=True)
+            current = TaskStatus(row["status"])
+            if not can_transition(current, TaskStatus.YOU_TODO):
+                raise RuntimeError(
+                    f"invalid transition on plan handoff: {current} -> you_todo"
+                )
+            comment = await comments_repo.create_comment(
+                conn,
+                row,
+                CommentCreate(
+                    author=Author.AI,
+                    text=PLAN_HANDOFF_COMMENT_TEMPLATE.format(plan=result.content_md),
+                    agent_role=AgentRole.EXECUTOR,  # プラン提示も実行AIの名義（#19）
+                ),
+            )
+            # §5.6 不変条件: ai_work 以外では progress は null
+            task = await tasks_repo.apply_patch(
+                conn, row, {"status": TaskStatus.YOU_TODO, "progress": None}
+            )
+            await ai_jobs_repo.mark_succeeded(
+                conn,
+                job_id,
+                input_tokens=result.usage.input_tokens,
+                output_tokens=result.usage.output_tokens,
+                cost_usd=0.0,
+            )
     publish_event(COMMENT_CREATED, comment.model_dump(mode="json", by_alias=True))
     publish_event(TASK_UPDATED, task.model_dump(mode="json", by_alias=True))
 

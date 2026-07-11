@@ -6,7 +6,12 @@
 import { forwardRef, type HTMLAttributes } from 'react';
 import { relevantRules } from '../../lib/retrieval.ts';
 import type { Task } from '../../types/domain.ts';
-import { STATUS_META } from '../../types/domain.ts';
+import {
+  AUTONOMY_META,
+  DEFAULT_AUTONOMY,
+  STATUS_META,
+  taskAutonomy,
+} from '../../types/domain.ts';
 import { useBoardStore } from '../../store/board.ts';
 import { Avatar } from './Avatar';
 import { StatusBadge } from './StatusBadge';
@@ -40,6 +45,8 @@ export const CardView = forwardRef<HTMLDivElement, CardViewProps>(
     // 左色バー（§3.2）: done は owner に関わらず緑。未完了は owner で色分け。
     const barTone = task.status === 'done' ? 'done' : meta.owner;
     const childTotal = task.childIds?.length ?? 0;
+    // #21: オートノミーのミニバッジ。既定 L1 は表示しない（L0/L2/L3 のみ）
+    const autonomy = taskAutonomy(task);
 
     return (
       <div ref={ref} className={`card${className ? ` ${className}` : ''}`} {...rest}>
@@ -51,6 +58,15 @@ export const CardView = forwardRef<HTMLDivElement, CardViewProps>(
             <span className="card__id">{task.id}</span>
           </div>
           <span className="card__meta-right">
+            {/* #21: オートノミーのミニバッジ（L1=既定は非表示） */}
+            {autonomy !== DEFAULT_AUTONOMY && (
+              <span
+                className={`card__autonomy card__autonomy--${autonomy.toLowerCase()}`}
+                title={`${AUTONOMY_META[autonomy].label} — ${AUTONOMY_META[autonomy].description}`}
+              >
+                {autonomy}
+              </span>
+            )}
             {/* #20: 適用予定ルール数の ◈N ミニチップ（0件は非表示） */}
             {ruleCount > 0 && (
               <span className="card__rules" title={`適用予定のルール ${ruleCount}件`}>

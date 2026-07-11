@@ -10,6 +10,7 @@ from app.domain.models import (
     AiJob,
     Artifact,
     Author,
+    AutonomyLevel,
     CamelModel,
     Confidence,
     LaneKey,
@@ -17,6 +18,7 @@ from app.domain.models import (
     Rule,
     RuleScope,
     Task,
+    TaskPolicy,
     TaskStatus,
 )
 
@@ -45,6 +47,8 @@ class TaskPatch(CamelModel):
     labels: list[str] | None = None
     progress: int | None = None  # null で明示クリア（ai_work 以外は null が不変条件）
     parent_id: str | None = None
+    autonomy: AutonomyLevel | None = None  # #21 オートノミー・ダイヤル（L0-L3）
+    policy: TaskPolicy | None = None  # #21 行動範囲ポリシー（全体置換）
 
 
 class TaskCreate(CamelModel):

@@ -55,3 +55,104 @@
   font-size: 11px;
   color: var(--color-text-weakest);
 }
+
+/* ---- #21 オートノミー・ダイヤル ＋ 行動範囲ポリシー ---- */
+
+.drawer-header__autonomy {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.autonomy-dial {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* L0-L3 セグメント（AGENT_ROLE ミニバッジ規格に馴染むトーン §04） */
+.autonomy-dial__btn {
+  border: none;
+  background: var(--color-chip-bg-2);
+  color: var(--color-text-secondary);
+  font-size: 10px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+  padding: 3px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+/* アクティブ色: L0=パープル（計画） / L1=ティール（実行・既定） /
+   L2=ティール濃（承認後自動） / L3=ダーク（全自動・指揮者トーン） */
+.autonomy-dial__btn--active.autonomy-dial__btn--l0 {
+  color: var(--color-purple);
+  background: var(--color-purple-bg2);
+}
+
+.autonomy-dial__btn--active.autonomy-dial__btn--l1 {
+  color: var(--color-teal-dark);
+  background: var(--color-teal-bg);
+}
+
+.autonomy-dial__btn--active.autonomy-dial__btn--l2 {
+  color: #fff;
+  background: var(--color-teal);
+}
+
+.autonomy-dial__btn--active.autonomy-dial__btn--l3 {
+  color: #fff;
+  background: var(--color-btn-dark-bg);
+}
+
+.autonomy-dial__label {
+  font-size: 10.5px;
+  color: var(--color-text-meta);
+  margin-left: 2px;
+}
+
+/* ポリシー行: Web検索トグル ＋ コスト上限入力 */
+.policy-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.policy-row__toggle {
+  border: none;
+  background: var(--color-chip-bg-2);
+  color: var(--color-text-weakest);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.policy-row__toggle--on {
+  color: var(--color-teal-dark);
+  background: var(--color-teal-bg);
+}
+
+.policy-row__cap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  color: var(--color-text-meta);
+}
+
+.policy-row__cap-input {
+  width: 64px;
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+  color: var(--color-text-secondary);
+  background: var(--color-chip-bg-2);
+  border: none;
+  border-radius: 6px;
+  padding: 3px 6px;
+}
+

@@ -143,8 +143,15 @@ def _labels(task: dict) -> str:
     return ", ".join(task.get("labels") or [])
 
 
-def _execute_system(task: dict, rules: list[dict], comments: list[dict]) -> str:
-    """§7.3 の system プロンプト（テンプレート忠実）。"""
+def _execute_system(
+    task: dict,
+    rules: list[dict],
+    comments: list[dict],
+    *,
+    allow_web_search: bool = True,
+    plan_only: bool = False,
+) -> str:
+    """§7.3 の system プロンプト（テンプレート忠実。#21 ポリシー/L0 で指示を追記）。"""
     parts = ["あなたは Grow のワークエージェントです。ユーザーの代わりにタスクを実行します。"]
     rules_section = _rules_section(rules)
     if rules_section:
@@ -169,6 +176,12 @@ def _execute_system(task: dict, rules: list[dict], comments: list[dict]) -> str:
         "その旨を明記して人にハンドオフする。",
         "- 進捗は簡潔に共有する。絵文字は使わない（※ルールに従う）。",
     ]
+    if not allow_web_search:
+        # #21 行動範囲ポリシー: 検索禁止時は既知情報のみで作成させる
+        parts.append("- Web検索は使用不可。既知情報のみで作成し、要確認事項を明記する。")
+    if plan_only:
+        # #21 L0（計画のみ）: 成果物本文は作らない
+        parts.append("- 今回は「実行プラン」の提案のみを行う。成果物の本文は作成しない。")
     return "\n".join(parts)
 
 
@@ -176,6 +189,20 @@ _EXECUTE_USER_MESSAGE = (
     "上記のタスクを実行してください。情報収集は Google 検索（読み取りのみ）で行い、"
     "成果物は Markdown レポート（冒頭3行サマリー → 本文 → 比較表 → 出典URL）として"
     "出力してください。"
+)
+
+# #21 ポリシー allowWebSearch=False: 検索に触れず、要確認事項の明記を求める
+_EXECUTE_USER_MESSAGE_NO_SEARCH = (
+    "上記のタスクを実行してください。Web検索は使用できないため、既知情報のみで"
+    "成果物を Markdown レポート（冒頭3行サマリー → 本文 → 比較表）として出力し、"
+    "最後に「要確認事項」を明記してください。"
+)
+
+# #21 L0（計画のみ）: 実行せず「実行プラン」だけを作らせる
+_EXECUTE_PLAN_USER_MESSAGE = (
+    "上記のタスクはまだ実行しないでください。どう進めるかの「実行プラン」だけを、"
+    "手順の番号付きリスト（各手順に目的と想定成果物を明記）で Markdown として"
+    "簡潔に出力してください。"
 )
 
 
@@ -405,16 +432,42 @@ class GeminiProvider(AiProvider):
         )
 
     async def execute(
-        self, task: dict, rules: list[dict], comments: list[dict]
+        self,
+        task: dict,
+        rules: list[dict],
+        comments: list[dict],
+        *,
+        policy: dict | None = None,
+        plan_only: bool = False,
     ) -> ExecuteResult:
-        """実作業（§7.3）: グラウンディング付きで Markdown レポートを生成する。"""
+        """実作業（§7.3）: グラウンディング付きで Markdown レポートを生成する。
+
+        #21: policy.allowWebSearch=False なら Google Search ツールを付けず、
+        既知情報のみで作成させる。plan_only=True（L0）は実行プランだけを生成する。
+        """
         settings = get_settings()
+        allow_web_search = bool((policy or {}).get("allowWebSearch", True))
+        if plan_only:
+            user_message = _EXECUTE_PLAN_USER_MESSAGE
+        elif allow_web_search:
+            user_message = _EXECUTE_USER_MESSAGE
+        else:
+            user_message = _EXECUTE_USER_MESSAGE_NO_SEARCH
+        tools = (
+            [types.Tool(google_search=types.GoogleSearch())] if allow_web_search else None
+        )
         response = await self._generate(
             model=settings.gemini_model_execute,
-            contents=_user_content(_EXECUTE_USER_MESSAGE),
+            contents=_user_content(user_message),
             config=types.GenerateContentConfig(
-                system_instruction=_execute_system(task, rules, comments),
-                tools=[types.Tool(google_search=types.GoogleSearch())],
+                system_instruction=_execute_system(
+                    task,
+                    rules,
+                    comments,
+                    allow_web_search=allow_web_search,
+                    plan_only=plan_only,
+                ),
+                tools=tools,
             ),
         )
         content_md = _append_sources(

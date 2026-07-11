@@ -32,15 +32,17 @@ import type {
   AgentRole,
   AiJob,
   Artifact,
+  AutonomyLevel,
   ChatMessage,
   Comment,
   LaneKey,
   Rule,
   RuleProposal,
   Task,
+  TaskPolicy,
   TaskStatus,
 } from '../types/domain.ts';
-import { STATUS_META } from '../types/domain.ts';
+import { STATUS_META, taskAutonomy } from '../types/domain.ts';
 
 export type PanelMode = 'detail' | 'chat';
 
@@ -139,8 +141,15 @@ export interface BoardActions {
    * §5.3 assignAI: POST /tasks/:id/assign-ai。202 後の反映（ai_work 化・着手コメント・
    * 進捗・完了ハンドオフ）はすべて SSE に任せる（§5.4 サーバ起点）。
    * 送信中は assigning フラグでボタンを無効化し、409/失敗は boardError。
+   * コスト上限到達（#21）も 409 — 停止理由コメント・you_todo 戻しは SSE が届ける。
    */
   assignAi: (taskId: string) => Promise<void>;
+
+  // ---- タスク別オートノミー（#21） ----
+  /** L0-L3 ダイヤル: 楽観的更新 → PATCH {autonomy}。失敗はロールバック＋boardError */
+  setAutonomy: (taskId: string, autonomy: AutonomyLevel) => Promise<void>;
+  /** 行動範囲ポリシー: 楽観的更新 → PATCH {policy}（全体置換）。失敗はロールバック */
+  setPolicy: (taskId: string, policy: TaskPolicy) => Promise<void>;
 
   // ---- 成果物（#10 / §00 #2） ----
   /** GET /tasks/:id/artifacts で全版を読み込む（ドロワーを開いたとき）。失敗は非表示のまま */
@@ -522,6 +531,43 @@ export const useBoardStore = create<BoardStore>()((set, get) => ({
       set({ boardError: 'AIにまかせられませんでした' });
     } finally {
       set((st) => ({ assigning: { ...st.assigning, [taskId]: false } }));
+    }
+  },
+
+  // ---- タスク別オートノミー（#21） ----
+  setAutonomy: async (taskId, autonomy) => {
+    const prev = get().cards[taskId];
+    if (prev === undefined || taskAutonomy(prev) === autonomy) return;
+    // 楽観的更新（§5.4）: レーンは変わらないので cards の差し替えのみ
+    set((s) => ({
+      cards: { ...s.cards, [taskId]: { ...prev, autonomy } },
+      boardError: null,
+    }));
+    try {
+      const updated = await patchTask(taskId, { autonomy });
+      get().applyTaskUpdated(updated); // 成功レスポンスで確定
+    } catch {
+      set((s) => ({
+        cards: { ...s.cards, [taskId]: prev },
+        boardError: 'オートノミーの変更に失敗しました',
+      }));
+    }
+  },
+  setPolicy: async (taskId, policy) => {
+    const prev = get().cards[taskId];
+    if (prev === undefined) return;
+    set((s) => ({
+      cards: { ...s.cards, [taskId]: { ...prev, policy } },
+      boardError: null,
+    }));
+    try {
+      const updated = await patchTask(taskId, { policy });
+      get().applyTaskUpdated(updated);
+    } catch {
+      set((s) => ({
+        cards: { ...s.cards, [taskId]: prev },
+        boardError: 'ポリシーの変更に失敗しました',
+      }));
     }
   },
 

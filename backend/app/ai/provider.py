@@ -79,9 +79,23 @@ class AiProvider(ABC):
 
     @abstractmethod
     async def execute(
-        self, task: dict, rules: list[dict], comments: list[dict]
+        self,
+        task: dict,
+        rules: list[dict],
+        comments: list[dict],
+        *,
+        policy: dict | None = None,
+        plan_only: bool = False,
     ) -> ExecuteResult:
-        """実作業（§7.3）: ルールと履歴を前提に Markdown 成果物を生成する。"""
+        """実作業（§7.3）: ルールと履歴を前提に Markdown 成果物を生成する。
+
+        - policy: 行動範囲ポリシー（#21）。camelCase の素の dict
+          （例 {"allowWebSearch": False, "costCapUsd": 2.0}）。None/省略キーは既定値
+          （Web検索可）。allowWebSearch=False のとき実装は検索ツールを使わず、
+          既知情報のみで作成して要確認事項を明記する。
+        - plan_only: True なら L0（計画のみ）。成果物本文ではなく「実行プラン」を
+          Markdown で返す（呼び出し側はコメントとして人へハンドオフする）。
+        """
 
     @abstractmethod
     async def propose_subtasks(

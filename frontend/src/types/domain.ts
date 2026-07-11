@@ -72,6 +72,61 @@ export const STATUS_META = {
 
 export const ALL_TASK_STATUSES = Object.keys(STATUS_META) as TaskStatus[];
 
+// ---- オートノミー（#21 L0-L3 ダイヤル） ----
+// backend/app/domain/models.py の AutonomyLevel / AUTONOMY_META と鏡写し。
+export type AutonomyLevel = 'L0' | 'L1' | 'L2' | 'L3';
+
+export interface AutonomyMeta {
+  label: string;
+  description: string; // ダイヤルの説明ツールチップに使う
+}
+
+// オートノミー・ダイヤルのメタ定義（UIツールチップと説明の単一の真実）
+// shared/contracts/autonomy_levels.json と一致することをテストで担保する。
+export const AUTONOMY_META = {
+  L0: {
+    label: '計画のみ',
+    description: '実行プランだけを提案し、作業は行わない。進め方はあなたが決める',
+  },
+  L1: {
+    label: '下書きまで',
+    description: '成果物の下書きまで作成し、あなたのレビューを待つ（既定）',
+  },
+  L2: {
+    label: '承認後は自動',
+    description: '実行プランの承認後は、完了まで自動で進める',
+  },
+  L3: {
+    label: '全自動',
+    description: '完了まで自動で進めて自動承認する。内容は事後レビューできる',
+  },
+} as const satisfies Record<AutonomyLevel, AutonomyMeta>;
+
+export const ALL_AUTONOMY_LEVELS = Object.keys(AUTONOMY_META) as AutonomyLevel[];
+
+/** 既定レベル（BE tasks.autonomy default 'L1' と鏡写し。L1 = 現行挙動） */
+export const DEFAULT_AUTONOMY: AutonomyLevel = 'L1';
+
+// 行動範囲ポリシー（#21）。backend TaskPolicy / tasks.policy（jsonb）と鏡写し。
+// 省略キーは既定値（Web検索可・コスト上限なし）で解釈する。
+export interface TaskPolicy {
+  allowWebSearch?: boolean; // 省略時 true
+  costCapUsd?: number | null; // null/省略 = 上限なし
+}
+
+/** 省略時既定を補完して読む（#21。BE は常に返すが旧フィクスチャ互換のため optional） */
+export function taskAutonomy(task: Task): AutonomyLevel {
+  return task.autonomy ?? DEFAULT_AUTONOMY;
+}
+
+export function taskAllowWebSearch(task: Task): boolean {
+  return task.policy?.allowWebSearch ?? true;
+}
+
+export function taskCostCapUsd(task: Task): number | null {
+  return task.policy?.costCapUsd ?? null;
+}
+
 // ---- エンティティ ----
 export interface Task {
   id: string; // 例 "T-098"（表示用の人間可読ID）。DB主キーは別にUUID
@@ -86,6 +141,11 @@ export interface Task {
   progress?: number; // 0..100（AI作業中のみ）
   parentId?: string | null; // サブタスクなら親のid
   childIds?: string[]; // 親なら子のid配列（進捗巻き上げ表示に使用）
+  // タスク別オートノミー（#21 L0-L3 ダイヤル）。BE は常に返すが旧フィクスチャ互換のため
+  // optional（省略時 L1 = 現行挙動）。読み出しは taskAutonomy() を使う
+  autonomy?: AutonomyLevel;
+  // 行動範囲ポリシー（#21）。省略キーは既定値（Web検索可・コスト上限なし）
+  policy?: TaskPolicy;
   // コメント件数（§3.2 カード右上の表示用）。backend が comments を集計して返す派生値。
   // コメント作成時は task.updated イベントでも配信され件数が同期される（#7）。
   commentCount: number;

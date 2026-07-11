@@ -6,12 +6,14 @@ import type {
   AiJob,
   Artifact,
   Author,
+  AutonomyLevel,
   Confidence,
   LaneKey,
   Owner,
   Rule,
   RuleScope,
   Task,
+  TaskPolicy,
   TaskStatus,
 } from './domain.ts';
 
@@ -38,6 +40,8 @@ export interface TaskPatch {
   labels?: string[];
   progress?: number | null; // null で明示クリア（ai_work 以外は null が不変条件）
   parentId?: string | null;
+  autonomy?: AutonomyLevel; // #21 オートノミー・ダイヤル（L0-L3）
+  policy?: TaskPolicy; // #21 行動範囲ポリシー（全体置換）
 }
 
 // POST /boards/:id/tasks

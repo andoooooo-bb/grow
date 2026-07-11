@@ -44,6 +44,12 @@ create table tasks (
   labels text[] not null default '{}',
   progress int,                     -- 0..100 nullable
   parent_id uuid references tasks(id),
+  -- タスク別オートノミー（#21）: 'L0'(計画のみ) | 'L1'(下書きまで・既定) |
+  -- 'L2'(プラン承認後は自動) | 'L3'(全自動・事後レビュー)。正準は shared/contracts/autonomy_levels.json
+  autonomy text not null default 'L1',
+  -- 行動範囲ポリシー（#21）: {"allowWebSearch": bool, "costCapUsd": number|null}。
+  -- 省略キーは既定値（Web検索可・コスト上限なし）。domain/models.py TaskPolicy と鏡写し
+  policy jsonb not null default '{}',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

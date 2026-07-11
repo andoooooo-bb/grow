@@ -97,9 +97,20 @@ class MockProvider(AiProvider):
     """プロトの固定応答をそのまま返す決定的プロバイダ（費用ゼロ・ネットワーク不要）。"""
 
     async def execute(
-        self, task: dict, rules: list[dict], comments: list[dict]
+        self,
+        task: dict,
+        rules: list[dict],
+        comments: list[dict],
+        *,
+        policy: dict | None = None,
+        plan_only: bool = False,
     ) -> ExecuteResult:
-        content_md = self._build_report(task, rules)
+        allow_web_search = bool((policy or {}).get("allowWebSearch", True))
+        if plan_only:
+            # L0（#21）: 成果物は作らず「実行プラン」だけを返す
+            content_md = self._build_plan(task, rules)
+        else:
+            content_md = self._build_report(task, rules, allow_web_search=allow_web_search)
         return ExecuteResult(
             content_md=content_md,
             usage=self._usage(content_md, task, rules, comments),
@@ -161,30 +172,59 @@ class MockProvider(AiProvider):
         )
 
     @staticmethod
-    def _build_report(task: dict, rules: list[dict]) -> str:
+    def _rules_section(rules: list[dict]) -> list[str]:
+        """「## 適用ルール」節の行（ルールなしなら空リスト = 節ごと省く）。"""
+        rule_texts = [r.get("text", "") for r in rules if r.get("text")]
+        if not rule_texts:
+            return []
+        return ["## 適用ルール", *[f"- {text}" for text in rule_texts], ""]
+
+    @classmethod
+    def _build_plan(cls, task: dict, rules: list[dict]) -> str:
+        """L0（#21 計画のみ）の固定「実行プラン」。成果物本文は作らない。"""
+        title = task.get("title", "")
+        lines = [
+            f"# {title} — 実行プラン",
+            "",
+            *cls._rules_section(rules),
+            "## 進め方（案）",
+            "1. 目的と評価軸の整理 — 何を判断するための作業かを確認する",
+            "2. 情報収集 — 公開情報から候補・材料を洗い出す",
+            "3. 比較・構成 — 評価軸ごとに整理し、成果物の骨子を組む",
+            "4. レポート化 — 3行サマリー → 本文 → 比較表 → 出典URL の順でまとめる",
+            "",
+            "## この時点での確認事項",
+            "- 対象範囲（候補数・期間）に指定があれば教えてください。",
+            "- 重視する評価軸があれば優先順位を教えてください。",
+        ]
+        return "\n".join(lines)
+
+    @classmethod
+    def _build_report(
+        cls, task: dict, rules: list[dict], *, allow_web_search: bool = True
+    ) -> str:
         """確定ユースケース「調査 → Markdown レポート化」の固定レポート（§7.3 運用）。
 
         構成: 冒頭3行サマリー → 本文セクション → 比較表 → 出典URL。
         task の title と、渡された rules のテキストを織り込む。
+        allow_web_search=False（#21 ポリシー）では出典URLの代わりに
+        「要確認事項」を明記する（決定的に文言が変わる）。
         """
         title = task.get("title", "")
+        summary_third = (
+            "- 判断の根拠となる出典 URL をレポート末尾に明記した。"
+            if allow_web_search
+            else "- ポリシーによりWeb検索は使用せず、既知情報のみで作成した。"
+        )
         lines = [
             f"# {title} — 調査レポート",
             "",
             "## サマリー",
             f"- 「{title}」について公開情報を調査し、要点を本レポートにまとめた。",
             "- 主要な候補を評価軸ごとに整理し、末尾の比較表で横断比較した。",
-            "- 判断の根拠となる出典 URL をレポート末尾に明記した。",
+            summary_third,
             "",
-        ]
-        rule_texts = [r.get("text", "") for r in rules if r.get("text")]
-        if rule_texts:
-            lines += [
-                "## 適用ルール",
-                *[f"- {text}" for text in rule_texts],
-                "",
-            ]
-        lines += [
+            *cls._rules_section(rules),
             "## 調査結果",
             "",
             "### 背景と目的",
@@ -203,9 +243,18 @@ class MockProvider(AiProvider):
             "| コスト | △ | ◎ | ○ |",
             "| サポート | ○ | ○ | ◎ |",
             "",
-            "## 出典URL",
-            "- https://example.com/research/source-1",
-            "- https://example.com/research/source-2",
-            "- https://example.com/research/source-3",
         ]
+        if allow_web_search:
+            lines += [
+                "## 出典URL",
+                "- https://example.com/research/source-1",
+                "- https://example.com/research/source-2",
+                "- https://example.com/research/source-3",
+            ]
+        else:
+            lines += [
+                "## 要確認事項",
+                "- Web検索は使用不可のため、既知情報のみで作成した。",
+                "- 最新の料金・仕様は人による確認が必要。",
+            ]
         return "\n".join(lines)

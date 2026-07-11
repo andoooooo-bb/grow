@@ -49,7 +49,7 @@ class _FailingProvider:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def execute(self, task: dict, rules: list, comments: list):
+    async def execute(self, task: dict, rules: list, comments: list, **kwargs):
         self.calls += 1
         raise RuntimeError("模擬的な失敗: provider が応答しません")
 

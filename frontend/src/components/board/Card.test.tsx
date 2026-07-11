@@ -140,6 +140,40 @@ describe('Card: 上段・進捗・ラベル（§3.2）', () => {
   });
 });
 
+// ---- #21: オートノミーのミニバッジ（L1=既定は非表示） ----
+
+describe('Card: オートノミーバッジ（#21）', () => {
+  it('L1（既定）はバッジを出さない', () => {
+    const { container } = render(<Card task={getTask('T-104')} />);
+    expect(container.querySelector('.card__autonomy')).toBeNull();
+  });
+
+  it('autonomy 未設定（旧データ）もバッジを出さない（既定 L1 扱い）', () => {
+    const task = { ...getTask('T-109') };
+    delete task.autonomy;
+    const { container } = render(<Card task={task} />);
+    expect(container.querySelector('.card__autonomy')).toBeNull();
+  });
+
+  it('L0 はパープルのバッジと説明ツールチップを出す', () => {
+    render(<Card task={{ ...getTask('T-104'), autonomy: 'L0' }} />);
+    const badge = screen.getByText('L0');
+    expect(badge).toHaveClass('card__autonomy');
+    expect(badge).toHaveClass('card__autonomy--l0');
+    expect(badge.getAttribute('title')).toContain('計画のみ');
+  });
+
+  it('L2 / L3 もバッジを出す（L3 はダーク）', () => {
+    render(<Card task={{ ...getTask('T-104'), autonomy: 'L2' }} />);
+    expect(screen.getByText('L2')).toHaveClass('card__autonomy--l2');
+
+    render(<Card task={{ ...getTask('T-109'), autonomy: 'L3' }} />);
+    const badge = screen.getByText('L3');
+    expect(badge).toHaveClass('card__autonomy--l3');
+    expect(badge.getAttribute('title')).toContain('全自動');
+  });
+});
+
 describe('Card: クリックで select(id)（§5.3）', () => {
   it('クリックすると selectedId が更新され panelMode=detail になる', () => {
     render(<Card task={getTask('T-098')} />);

@@ -19,9 +19,12 @@ from app.domain.dto import (
     TaskPatch,
 )
 from app.domain.models import (
+    AUTONOMY_META,
     STATUS_META,
+    AutonomyLevel,
     Owner,
     Task,
+    TaskPolicy,
     TaskStatus,
 )
 from app.domain.state_machine import (
@@ -33,6 +36,9 @@ from app.domain.state_machine import (
 CONTRACTS_DIR = Path(__file__).resolve().parents[2] / "shared" / "contracts"
 STATUS_META_JSON = json.loads((CONTRACTS_DIR / "status_meta.json").read_text(encoding="utf-8"))
 TRANSITIONS_JSON = json.loads((CONTRACTS_DIR / "transitions.json").read_text(encoding="utf-8"))
+AUTONOMY_LEVELS_JSON = json.loads(
+    (CONTRACTS_DIR / "autonomy_levels.json").read_text(encoding="utf-8")
+)
 
 ALL_STATUSES = list(TaskStatus)
 
@@ -70,6 +76,53 @@ class TestStatusMeta:
             TaskStatus.YOU_REVIEW,
             TaskStatus.REVIEWING,
         }
+
+
+# ---- AUTONOMY_META（#21） ----
+class TestAutonomyMeta:
+    def test_matches_canonical_fixture(self):
+        """AUTONOMY_META が shared/contracts/autonomy_levels.json と完全一致する。"""
+        as_dict = {
+            level.value: meta.model_dump(by_alias=True)
+            for level, meta in AUTONOMY_META.items()
+        }
+        assert as_dict == AUTONOMY_LEVELS_JSON
+
+    def test_covers_all_levels(self):
+        assert set(AUTONOMY_META.keys()) == set(AutonomyLevel)
+        assert len(AUTONOMY_META) == 4
+        assert [level.value for level in AutonomyLevel] == ["L0", "L1", "L2", "L3"]
+
+    def test_default_autonomy_is_l1_and_policy_defaults(self):
+        """Task の既定は L1（現行挙動）・ポリシー既定は Web検索可/上限なし（#21）。"""
+        task = Task(
+            id="T-001",
+            workspace_id="ws-1",
+            board_id="b-1",
+            lane_key="todo",
+            order_in_lane=0,
+            title="t",
+            status=TaskStatus.QUEUED,
+            owner_user_id="u-1",
+            labels=[],
+            created_at="2026-07-07T00:00:00Z",
+            updated_at="2026-07-07T00:00:00Z",
+        )
+        assert task.autonomy is AutonomyLevel.L1
+        assert task.policy == TaskPolicy()
+        assert task.policy.allow_web_search is True
+        assert task.policy.cost_cap_usd is None
+
+    def test_policy_parses_camel_case_and_ignores_missing_keys(self):
+        """policy jsonb の camelCase 表現から構築でき、省略キーは既定値になる。"""
+        policy = TaskPolicy.model_validate({"allowWebSearch": False, "costCapUsd": 2.5})
+        assert policy.allow_web_search is False
+        assert policy.cost_cap_usd == 2.5
+        assert TaskPolicy.model_validate_json("{}") == TaskPolicy()
+
+    def test_policy_rejects_negative_cost_cap(self):
+        with pytest.raises(ValueError):
+            TaskPolicy.model_validate({"costCapUsd": -1})
 
 
 # ---- ステートマシン ----
@@ -185,6 +238,8 @@ class TestDtoContracts:
             "ownerUserId": "u-1",
             "labels": ["仕事", "調査"],
             "progress": 60,
+            "autonomy": "L1",  # #21 で追加（省略時デフォルト L1）
+            "policy": {"allowWebSearch": True},  # #21（costCapUsd None は exclude_none で省略）
             "commentCount": 0,  # #7 で追加（省略時デフォルト 0）
             "createdAt": "2026-07-07T00:00:00Z",
             "updatedAt": "2026-07-07T00:00:00Z",

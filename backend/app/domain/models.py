@@ -2,12 +2,13 @@
 
 API 表現は camelCase（alias）、Python 内部は snake_case。
 populate_by_name=True なのでどちらの名前でも構築できる。
-STATUS_META は shared/contracts/status_meta.json と一致することをテストで担保する。
+STATUS_META は shared/contracts/status_meta.json、AUTONOMY_META は
+shared/contracts/autonomy_levels.json と一致することをテストで担保する。
 """
 
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 
@@ -87,6 +88,20 @@ class AiJobStatus(StrEnum):
     FAILED = "failed"
 
 
+class AutonomyLevel(StrEnum):
+    """タスク別オートノミー（#21 L0-L3 ダイヤル）。
+
+    AIが「自分で進めてよいか、人の承認を待つか」を判断する権限設定。
+    #22 指揮者エージェントは tasks.autonomy（この値）と tasks.policy を参照して
+    プラン承認ゲート（L2）や自動リレーの範囲を決める。
+    """
+
+    L0 = "L0"  # 計画のみ（実行プランを提案して人へハンドオフ）
+    L1 = "L1"  # 下書きまで（既定・現行挙動: you_review で人のレビューを待つ）
+    L2 = "L2"  # プラン承認後は完了まで自動（#22 指揮者が実現。現段階は L1 と同挙動）
+    L3 = "L3"  # 全自動（done まで連鎖適用し自動承認。事後レビュー可）
+
+
 # ---- 基底（camelCase alias） ----
 class CamelModel(BaseModel):
     """API 用に camelCase alias を持つ基底モデル。"""
@@ -118,6 +133,45 @@ STATUS_META: dict[TaskStatus, StatusMeta] = {
 }
 
 
+# ---- AUTONOMY_META（#21） ----
+class AutonomyMeta(CamelModel):
+    label: str
+    description: str
+
+
+# オートノミー・ダイヤルのメタ定義（UIツールチップと説明の単一の真実）。
+# shared/contracts/autonomy_levels.json と一致することをテストで担保する。
+AUTONOMY_META: dict[AutonomyLevel, AutonomyMeta] = {
+    AutonomyLevel.L0: AutonomyMeta(
+        label="計画のみ",
+        description="実行プランだけを提案し、作業は行わない。進め方はあなたが決める",
+    ),
+    AutonomyLevel.L1: AutonomyMeta(
+        label="下書きまで",
+        description="成果物の下書きまで作成し、あなたのレビューを待つ（既定）",
+    ),
+    AutonomyLevel.L2: AutonomyMeta(
+        label="承認後は自動",
+        description="実行プランの承認後は、完了まで自動で進める",
+    ),
+    AutonomyLevel.L3: AutonomyMeta(
+        label="全自動",
+        description="完了まで自動で進めて自動承認する。内容は事後レビューできる",
+    ),
+}
+
+
+class TaskPolicy(CamelModel):
+    """行動範囲ポリシー（#21）。tasks.policy（jsonb）と鏡写し。
+
+    省略キーは既定値（Web検索可・コスト上限なし）で解釈する。
+    #22 指揮者・将来の自動リレーもこの型を通して権限を読む。
+    """
+
+    allow_web_search: bool = True  # False: provider は検索ツールを使わない
+    cost_cap_usd: float | None = Field(default=None, ge=0)  # None = 上限なし
+
+
 # ---- エンティティ ----
 class Task(CamelModel):
     id: str  # 例 "T-098"（表示用の人間可読ID）。DB主キーは別にUUID
@@ -132,6 +186,10 @@ class Task(CamelModel):
     progress: int | None = None  # 0..100（AI作業中のみ）
     parent_id: str | None = None  # サブタスクなら親のid
     child_ids: list[str] | None = None  # 親なら子のid配列（進捗巻き上げ表示）
+    # タスク別オートノミー（#21 L0-L3 ダイヤル）。既定 L1 = 現行挙動（下書きまで）
+    autonomy: AutonomyLevel = AutonomyLevel.L1
+    # 行動範囲ポリシー（#21）。省略キーは既定値（Web検索可・コスト上限なし）
+    policy: TaskPolicy = Field(default_factory=TaskPolicy)
     # コメント件数（§3.2 カード右上の表示用）。repo が comments を集計して詰める派生値。
     # コメント作成時は task.updated イベントでも配信され、クライアントの件数が同期される（#7）。
     comment_count: int = 0
