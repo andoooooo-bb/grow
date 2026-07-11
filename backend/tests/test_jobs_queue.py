@@ -27,15 +27,15 @@ def settings_env(monkeypatch: pytest.MonkeyPatch):
 async def test_local_runner_spawns_coroutine(
     settings_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """local: run_execute_job が asyncio.create_task でプロセス内起動される。"""
+    """local: ディスパッチャ（registry.dispatch_job）が asyncio.create_task で起動される。"""
     settings_env(JOB_RUNNER="local")
     ran: list[str] = []
 
-    async def _fake_run(job_id: str) -> bool:
+    async def _fake_dispatch(job_id: str) -> bool:
         ran.append(job_id)
         return True
 
-    monkeypatch.setattr("app.jobs.execute.run_execute_job", _fake_run)
+    monkeypatch.setattr("app.jobs.registry.dispatch_job", _fake_dispatch)
     await jobs_queue.enqueue_job("job-local-1")
     await jobs_queue.drain_local_jobs()
     assert ran == ["job-local-1"]
@@ -76,6 +76,35 @@ async def test_cloud_tasks_runner_enqueues_http_task(
     assert json.loads(http["body"]) == {"jobId": "job-ct-1"}
     # INTERNAL_JOBS_TOKEN 未設定時はトークンヘッダを付けない（ローカル互換, #16）
     assert "X-Internal-Jobs-Token" not in http["headers"]
+
+
+async def test_cloud_tasks_runner_includes_optional_kind_in_body(
+    settings_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """cloud_tasks: kind 指定時は body に同梱される（参考情報。ディスパッチは DB の kind, #18）。"""
+    from google.cloud import tasks_v2
+
+    settings_env(
+        JOB_RUNNER="cloud_tasks",
+        GCP_PROJECT="test-proj",
+        SELF_URL="https://grow.example.run.app",
+    )
+    created: list[dict] = []
+
+    class _FakeClient:
+        def queue_path(self, project: str, location: str, queue: str) -> str:
+            return f"projects/{project}/locations/{location}/queues/{queue}"
+
+        def create_task(self, request: dict) -> None:
+            created.append(request)
+
+    monkeypatch.setattr(tasks_v2, "CloudTasksClient", _FakeClient)
+
+    await jobs_queue.enqueue_job("job-ct-3", kind="execute")
+
+    assert len(created) == 1
+    body = json.loads(created[0]["task"]["http_request"]["body"])
+    assert body == {"jobId": "job-ct-3", "kind": "execute"}
 
 
 async def test_cloud_tasks_runner_attaches_internal_jobs_token(

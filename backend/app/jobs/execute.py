@@ -58,6 +58,22 @@ class JobNotFoundError(Exception):
     """指定 ID の ai_jobs 行が存在しない。"""
 
 
+async def run_execute_job_row(
+    job_row: asyncpg.Record,
+    *,
+    max_retries: int | None = None,
+    handoff_on_failure: bool = True,
+) -> bool:
+    """kind='execute' の登録ハンドラ（app/jobs/registry.py の統一シグネチャ, #18）。
+
+    行の状態は試行ごとに変わり得るため job_row からは id のみを使い、
+    実行本体（run_execute_job）が毎試行 ai_jobs 行を再取得する。
+    """
+    return await run_execute_job(
+        str(job_row["id"]), max_retries=max_retries, handoff_on_failure=handoff_on_failure
+    )
+
+
 async def run_execute_job(
     job_id: str,
     *,
