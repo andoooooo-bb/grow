@@ -62,17 +62,28 @@ fi
 #   cloudtasks.enqueuer       — AIジョブの enqueue（app/jobs/queue.py）
 #   cloudsql.client           — Cloud SQL unix socket 接続（--add-cloudsql-instances）
 #   secretmanager.secretAccessor — DATABASE_URL / INTERNAL_JOBS_TOKEN の参照
+# SA 作成直後は結果整合性で "does not exist" になることがあるためリトライする
 for role in \
   roles/aiplatform.user \
   roles/cloudtasks.enqueuer \
   roles/cloudsql.client \
   roles/secretmanager.secretAccessor; do
-  gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-    --member "serviceAccount:${SA_EMAIL}" \
-    --role "$role" \
-    --condition None \
-    --quiet >/dev/null
-  echo "  bind: ${role}"
+  for attempt in 1 2 3 4 5; do
+    if gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+      --member "serviceAccount:${SA_EMAIL}" \
+      --role "$role" \
+      --condition None \
+      --quiet >/dev/null 2>&1; then
+      echo "  bind: ${role}"
+      break
+    fi
+    if [ "$attempt" = 5 ]; then
+      echo "  ERROR: ${role} のバインドに失敗しました" >&2
+      exit 1
+    fi
+    echo "  retry(${attempt}): ${role}（SA伝播待ち…）"
+    sleep 10
+  done
 done
 
 echo "== [4/5] Cloud Tasks キュー: ${QUEUE_NAME} (${REGION})"

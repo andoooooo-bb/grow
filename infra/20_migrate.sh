@@ -70,7 +70,9 @@ fi
 echo "  OK"
 
 echo "== [3/4] cloud-sql-proxy 起動（localhost:${PROXY_PORT} → ${CONNECTION_NAME}）"
-cloud-sql-proxy --address 127.0.0.1 --port "$PROXY_PORT" "$CONNECTION_NAME" &
+# ADC に依存せず gcloud のアクセストークンで認可する（ADC が別アカウントでも安全）
+cloud-sql-proxy --address 127.0.0.1 --port "$PROXY_PORT" \
+  --token "$(gcloud auth print-access-token)" "$CONNECTION_NAME" &
 PROXY_PID=$!
 trap 'kill "$PROXY_PID" 2>/dev/null || true' EXIT
 
