@@ -195,6 +195,33 @@ async def promote_rule(conn: asyncpg.Connection, row: asyncpg.Record) -> Rule:
     return await rule_dto_from_row(conn, new_row)
 
 
+# confidence の1段降格の対応（#23。low が下限 — それ以上は下げない）
+_CONFIDENCE_DOWNGRADE: dict[str, Confidence] = {
+    "high": Confidence.MED,
+    "med": Confidence.LOW,
+}
+
+
+async def downgrade_confidence(
+    conn: asyncpg.Connection, row: asyncpg.Record
+) -> Rule | None:
+    """ルールの confidence を1段降格する（#23 矛盾検出 / 夜間ナレッジCI #26 と共用）。
+
+    high→med / med→low。既に low なら何もしない（None を返す）。
+    降格した場合は更新後の Rule DTO を返す（RULE_UPDATED の SSE payload 用）。
+    トランザクション内で呼ぶこと。
+    """
+    next_confidence = _CONFIDENCE_DOWNGRADE.get(row["confidence"])
+    if next_confidence is None:
+        return None
+    new_row = await conn.fetchrow(
+        "update rules set confidence = $2, updated_at = now() where id = $1 returning *",
+        row["id"],
+        next_confidence.value,
+    )
+    return await rule_dto_from_row(conn, new_row)
+
+
 async def add_feedback(
     conn: asyncpg.Connection,
     task_row: asyncpg.Record,

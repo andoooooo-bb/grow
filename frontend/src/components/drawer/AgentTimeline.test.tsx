@@ -65,6 +65,32 @@ describe('AgentTimeline（#19 リレー・タイムライン）', () => {
     expect(stepLabels(container)).toEqual(['計画AI', '実行AI', '学習AI', 'あなた']);
   });
 
+  it('kind=review はレビューAIとしてリレーに乗る（#23 セルフレビュー連鎖）', () => {
+    useBoardStore.setState({
+      jobs: {
+        'T-098': [
+          makeJob('execute', 'succeeded'),
+          makeJob('review', 'succeeded'), // revise → 差し戻し
+          makeJob('execute', 'succeeded'), // 修正
+          makeJob('review', 'running'), // 再検査中
+        ],
+      },
+    });
+    const { container } = render(
+      <AgentTimeline task={useBoardStore.getState().cards['T-098']} />,
+    );
+    expect(stepLabels(container)).toEqual([
+      '実行AI',
+      'レビューAI',
+      '実行AI',
+      'レビューAI',
+      'あなた',
+    ]);
+    const steps = [...container.querySelectorAll('.agent-timeline__step')];
+    expect(steps[1]).toHaveClass('agent-timeline__step--reviewer');
+    expect(steps[3]).toHaveClass('agent-timeline__step--active');
+  });
+
   it('完了=塗り / 実行中=点滅 / 未来=グレー、実行中はあなたが future', () => {
     useBoardStore.setState({
       jobs: {

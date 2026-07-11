@@ -11,7 +11,7 @@ import pytest
 from app.events import bus
 from app.jobs import execute as execute_mod
 from app.jobs import queue as jobs_queue
-from tests.helpers import db_connect, drain_events
+from tests.helpers import db_connect, drain_events, drain_jobs
 
 
 @pytest.fixture
@@ -19,7 +19,7 @@ def captured_jobs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """enqueue をフェイク化（ジョブは必要なら /internal/jobs/run を手動で叩く）。"""
     jobs: list[str] = []
 
-    async def _fake_enqueue(job_id: str) -> None:
+    async def _fake_enqueue(job_id: str, *, kind: str | None = None) -> None:
         jobs.append(job_id)
 
     monkeypatch.setattr(jobs_queue, "enqueue_job", _fake_enqueue)
@@ -123,16 +123,21 @@ async def test_assign_ai_start_comment_is_executor(
 async def test_execute_job_comments_are_executor(
     api_client: httpx.AsyncClient, captured_jobs: list[str], zero_delays
 ) -> None:
-    """execute ジョブの進捗・完了コメントも実行AI（executor）名義。"""
-    res = await api_client.post("/api/tasks/T-104/assign-ai")
-    job_id = res.json()["jobId"]
-    run = await api_client.post("/internal/jobs/run", json={"jobId": job_id})
-    assert run.json() == {"status": "succeeded"}
+    """execute の進捗・完了は executor、セルフレビューの指摘・承認は reviewer 名義（#23）。"""
+    await api_client.post("/api/tasks/T-104/assign-ai")
+    await drain_jobs(api_client, captured_jobs)  # execute→review→execute→review を完走
 
     conn = await db_connect()
     try:
-        # 着手 → 進捗 → 完了の3コメントすべて executor
-        assert await _agent_roles(conn, "T-104") == [("ai", "executor")] * 3
+        # 着手(e) → 進捗(e) → 指摘(r) → 進捗(e) → 承認(r) → 完了(e)
+        assert await _agent_roles(conn, "T-104") == [
+            ("ai", "executor"),
+            ("ai", "executor"),
+            ("ai", "reviewer"),
+            ("ai", "executor"),
+            ("ai", "reviewer"),
+            ("ai", "executor"),
+        ]
     finally:
         await conn.close()
 

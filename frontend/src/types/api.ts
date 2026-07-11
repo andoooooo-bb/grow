@@ -116,6 +116,11 @@ export interface AssignAiResponse {
   jobId: string;
 }
 
+// POST /tasks/:id/reject（#23 人の構造化差し戻し）。理由は必須
+export interface RejectRequest {
+  reason: string;
+}
+
 // GET /tasks/:id/jobs（#19 リレー・タイムライン。createdAt 昇順 = リレー履歴）
 export interface JobsResponse {
   taskId: string;

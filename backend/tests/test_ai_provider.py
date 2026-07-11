@@ -268,39 +268,60 @@ async def test_usage_grows_with_input_size(provider: MockProvider):
 
 
 def _conductor_task(
-    status: str, *, has_chat: bool = False, has_artifact: bool = False
+    status: str,
+    *,
+    has_chat: bool = False,
+    has_artifact: bool = False,
+    has_review: bool = False,
 ) -> dict:
-    """orchestrate ジョブが集約する現況キー付きのタスク dict（#22）。"""
+    """orchestrate ジョブが集約する現況キー付きのタスク dict（#22/#23）。"""
     return {
         **_task(),
         "status": status,
         "autonomy": "L1",
         "hasChat": has_chat,
         "hasArtifact": has_artifact,
+        "hasReview": has_review,
         "childStatuses": [],
     }
 
 
 @pytest.mark.parametrize(
-    ("status", "has_chat", "has_artifact", "expected"),
+    ("status", "has_chat", "has_artifact", "has_review", "expected"),
     [
-        ("breakdown", False, False, "hearing"),  # 前提が未確認 → まず質問
-        ("spec", False, False, "hearing"),
-        ("breakdown", True, False, "breakdown"),  # 壁打ち済み → 分解を提案
-        ("spec", True, False, "breakdown"),
-        ("queued", False, False, "execute"),  # 実行可能 → 実行AIへ
-        ("you_todo", False, True, "execute"),  # 差し戻し後の再実行も execute
-        ("you_review", False, True, "handoff_human"),  # 成果物レビューは人の判断
-        ("reviewing", False, True, "handoff_human"),
-        ("ai_work", False, False, "handoff_human"),  # 判断できない状態は人へ（安全側）
-        ("done", False, True, "done"),  # 完了済み → 終了
+        ("breakdown", False, False, False, "hearing"),  # 前提が未確認 → まず質問
+        ("spec", False, False, False, "hearing"),
+        ("breakdown", True, False, False, "breakdown"),  # 壁打ち済み → 分解を提案
+        ("spec", True, False, False, "breakdown"),
+        ("queued", False, False, False, "execute"),  # 実行可能 → 実行AIへ
+        ("you_todo", False, True, False, "execute"),  # 差し戻し後の再実行も execute
+        # 成果物ありでもセルフレビュー未実施なら、人の前にレビューAIへ（#23）
+        ("you_review", False, True, False, "review"),
+        ("reviewing", False, True, False, "review"),
+        # レビュー済みの成果物レビューは人の判断
+        ("you_review", False, True, True, "handoff_human"),
+        ("reviewing", False, True, True, "handoff_human"),
+        ("ai_work", False, False, False, "handoff_human"),  # 判断できない状態は人へ（安全側）
+        ("done", False, True, True, "done"),  # 完了済み → 終了
     ],
 )
 async def test_decide_next_action_state_machine(
-    provider: MockProvider, status: str, has_chat: bool, has_artifact: bool, expected: str
+    provider: MockProvider,
+    status: str,
+    has_chat: bool,
+    has_artifact: bool,
+    has_review: bool,
+    expected: str,
 ):
     result = await provider.decide_next_action(
-        _conductor_task(status, has_chat=has_chat, has_artifact=has_artifact), [], []
+        _conductor_task(
+            status,
+            has_chat=has_chat,
+            has_artifact=has_artifact,
+            has_review=has_review,
+        ),
+        [],
+        [],
     )
     assert result.action == expected
     assert result.reason  # 判断理由は必ず付く（（理由: …）コメントの材料）
@@ -313,3 +334,117 @@ async def test_decide_next_action_is_deterministic(provider: MockProvider):
     assert await provider.decide_next_action(
         task, history, []
     ) == await provider.decide_next_action(task, history, [])
+
+
+# --- review_artifact（#23 セルフレビュー。決定的な approve / revise 分岐） ---
+
+
+async def test_review_artifact_revises_first_draft_with_rule_citation(
+    provider: MockProvider,
+):
+    """対応セクションのない初回成果物は revise。指摘は「出典」ルールを優先引用する。"""
+    rules = [
+        {"id": "K-02", "text": "絵文字は使わない。文体は簡潔・断定調に統一する"},
+        {"id": "K-03", "text": "競合調査は料金を表形式にし、各項目に出典URLを付ける"},
+    ]
+    result = await provider.review_artifact(_task(), "# 調査レポート\n本文", rules)
+    assert result.verdict == "revise"
+    assert len(result.findings) == 1
+    assert "競合調査は料金を表形式にし、各項目に出典URLを付ける" in result.findings[0]
+    _assert_positive_usage(result.usage)
+
+
+async def test_review_artifact_revises_without_rules_using_generic_finding(
+    provider: MockProvider,
+):
+    result = await provider.review_artifact(_task(), "# 調査レポート\n本文", [])
+    assert result.verdict == "revise"
+    assert result.findings == ["比較表に出典URL列がありません。出典を明記して追記してください"]
+
+
+@pytest.mark.parametrize("section", ["## レビュー対応", "## 差し戻し対応"])
+async def test_review_artifact_approves_fixed_versions(
+    provider: MockProvider, section: str
+):
+    """指摘・差し戻しへの対応セクションがある修正版は approve（findings なし）。"""
+    result = await provider.review_artifact(
+        _task(), f"# 調査レポート\n{section}\n対応済み", []
+    )
+    assert result.verdict == "approve"
+    assert result.findings == []
+    _assert_positive_usage(result.usage)
+
+
+async def test_review_artifact_is_deterministic(provider: MockProvider):
+    task = _task()
+    rules = [{"id": "K-03", "text": "競合調査は料金を表形式にし、各項目に出典URLを付ける"}]
+    assert await provider.review_artifact(
+        task, "# v1", rules
+    ) == await provider.review_artifact(task, "# v1", rules)
+
+
+# --- execute への差し戻し理由・レビュー指摘の反映（#23） ---
+
+
+async def test_execute_reflects_reject_reason_in_report(provider: MockProvider):
+    """履歴に【差し戻し理由】があれば、成果物に理由の全文を含む対応セクションが載る。"""
+    reason = "比較表は不要です。ルールとは逆に、箇条書きでまとめてください"
+    comments = [
+        {"who": "ai", "text": "完了しました。レビューをお願いします。"},
+        {"who": "human", "text": f"【差し戻し理由】{reason}"},
+    ]
+    result = await provider.execute(_task(), rules=[], comments=comments)
+    assert "## 差し戻し対応" in result.content_md
+    assert reason in result.content_md  # 理由の反映が検証可能（#23 DoD）
+
+
+async def test_execute_reflects_review_findings_in_report(provider: MockProvider):
+    """履歴に【レビュー指摘】があれば、修正版に「## レビュー対応」セクションが載る。"""
+    comments = [
+        {"who": "ai", "text": "【レビュー指摘】\n- 比較表に出典URL列がありません"},
+    ]
+    result = await provider.execute(_task(), rules=[], comments=comments)
+    assert "## レビュー対応" in result.content_md
+
+
+async def test_execute_without_revision_history_has_no_fix_sections(
+    provider: MockProvider,
+):
+    result = await provider.execute(_task(), rules=[], comments=[])
+    assert "## レビュー対応" not in result.content_md
+    assert "## 差し戻し対応" not in result.content_md
+
+
+# --- check_rule_conflicts（#23 矛盾検出。決定的分岐） ---
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "比較表は不要です。ルールとは合わないのでやめてください",
+        "逆に、結論は最後にまとめてください",
+    ],
+)
+async def test_check_rule_conflicts_returns_first_rule_on_conflict_keywords(
+    provider: MockProvider, reason: str
+):
+    rules = [
+        {"id": "K-01", "text": "レポートは結論→根拠の順で書き、冒頭に3行サマリーを置く"},
+        {"id": "K-03", "text": "競合調査は料金を表形式にし、各項目に出典URLを付ける"},
+    ]
+    result = await provider.check_rule_conflicts(reason, rules)
+    assert result.rule_ids == ["K-01"]
+    _assert_positive_usage(result.usage)
+
+
+async def test_check_rule_conflicts_returns_empty_for_unrelated_reason(
+    provider: MockProvider,
+):
+    rules = [{"id": "K-01", "text": "レポートは結論→根拠の順で書く"}]
+    result = await provider.check_rule_conflicts("誤字が多いので直してください", rules)
+    assert result.rule_ids == []
+
+
+async def test_check_rule_conflicts_returns_empty_without_rules(provider: MockProvider):
+    result = await provider.check_rule_conflicts("ルールとは逆にしてください", [])
+    assert result.rule_ids == []

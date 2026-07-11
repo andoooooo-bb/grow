@@ -41,9 +41,13 @@ async def create_comment(
             raise InvalidAuthorUserError(
                 f"invalid author_user_id: {data.author_user_id}"
             ) from exc
+    # created_at は clock_timestamp() で明示する: 既定の now() はトランザクション開始
+    # 時刻のため、同一トランザクションで複数コメントを投稿するフロー（#21 L3 の
+    # 完了→自動承認、#23 レビュー承認→完了ハンドオフ）で時刻が同値になり、
+    # created_at 順の表示・検証が不定になるのを防ぐ。
     row = await conn.fetchrow(
-        "insert into comments (task_id, author, author_user_id, text, agent_role) "
-        "values ($1, $2, $3, $4, $5) returning *",
+        "insert into comments (task_id, author, author_user_id, text, agent_role, created_at) "
+        "values ($1, $2, $3, $4, $5, clock_timestamp()) returning *",
         task_row["id"],
         data.author.value,
         author_user_uuid,

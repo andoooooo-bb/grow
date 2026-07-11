@@ -14,7 +14,7 @@ from google.genai import types
 import app.ai.gemini_provider as gemini_module
 from app.ai import get_provider
 from app.ai.gemini_provider import GeminiProvider, GeminiResponseError
-from app.ai.provider import RuleProposal, SubtaskProposal
+from app.ai.provider import RuleProposal, SubtaskProposal, TokenUsage
 from app.config import get_settings
 
 
@@ -588,6 +588,7 @@ async def test_decide_next_action_declares_enum_and_forces_function_calling(patc
         "hearing",
         "breakdown",
         "execute",
+        "review",  # レビューAIへのリレー（#23）
         "handoff_human",
         "done",
     ]
@@ -616,3 +617,126 @@ async def test_decide_next_action_raises_without_function_call(patch_client):
     patch_client(_text_response("次は execute が良いと思います"))
     with pytest.raises(GeminiResponseError):
         await GeminiProvider().decide_next_action(_conductor_task(), [], [])
+
+
+# ---- review_artifact（#23 セルフレビュー） ------------------------------------------
+
+
+async def test_review_artifact_declares_verdict_enum_and_injects_rules(patch_client):
+    fake = patch_client(
+        _function_call_response(
+            "review_artifact", {"verdict": "approve", "findings": []}
+        )
+    )
+    result = await GeminiProvider().review_artifact(
+        _task(), "# 調査レポート\n本文", _RULES
+    )
+    assert result.verdict == "approve"
+    assert result.findings == []
+    assert result.usage == TokenUsage(input_tokens=80, output_tokens=21)
+
+    call = fake.models.calls[0]
+    assert call["model"] == "gemini-2.5-flash"  # 検査は execute のたび走るので Flash 系
+
+    system = call["config"].system_instruction
+    assert "レビューエージェント" in system
+    # ルールが「審査基準」として注入され、検査対象の成果物も system に載る
+    assert "# 審査基準（適用ルール）" in system
+    assert "レポートは結論→根拠の順で書き、冒頭に3行サマリーを置く" in system
+    assert "# 調査レポート" in system
+
+    decl = call["config"].tools[0].function_declarations[0]
+    assert decl.name == "review_artifact"
+    assert decl.parameters.properties["verdict"].enum == ["approve", "revise"]
+    assert decl.parameters.required == ["verdict", "findings"]
+    fc = call["config"].tool_config.function_calling_config
+    assert fc.mode == types.FunctionCallingConfigMode.ANY
+    assert fc.allowed_function_names == ["review_artifact"]
+
+
+async def test_review_artifact_parses_revise_findings(patch_client):
+    patch_client(
+        _function_call_response(
+            "review_artifact",
+            {"verdict": "revise", "findings": ["比較表に出典URL列を追加してください"]},
+        )
+    )
+    result = await GeminiProvider().review_artifact(_task(), "# v1", _RULES)
+    assert result.verdict == "revise"
+    assert result.findings == ["比較表に出典URL列を追加してください"]
+
+
+async def test_review_artifact_rejects_revise_without_findings(patch_client):
+    """指摘なしの revise は実行AIが対処できないため応答エラー扱い。"""
+    patch_client(
+        _function_call_response("review_artifact", {"verdict": "revise", "findings": []})
+    )
+    with pytest.raises(GeminiResponseError):
+        await GeminiProvider().review_artifact(_task(), "# v1", _RULES)
+
+
+async def test_review_artifact_rejects_unknown_verdict(patch_client):
+    patch_client(
+        _function_call_response("review_artifact", {"verdict": "maybe", "findings": []})
+    )
+    with pytest.raises(GeminiResponseError):
+        await GeminiProvider().review_artifact(_task(), "# v1", _RULES)
+
+
+# ---- check_rule_conflicts（#23 矛盾検出） -------------------------------------------
+
+
+async def test_check_rule_conflicts_filters_unknown_rule_ids(patch_client):
+    """渡したルール以外の id（幻覚）は捨て、実在ルールのみ返す。"""
+    fake = patch_client(
+        _function_call_response(
+            "check_rule_conflicts", {"ruleIds": ["K-01", "K-99", "K-01"]}
+        )
+    )
+    result = await GeminiProvider().check_rule_conflicts(
+        "ルールとは逆にしてください", _RULES
+    )
+    assert result.rule_ids == ["K-01"]  # K-99（幻覚）と重複は除外
+    assert result.usage == TokenUsage(input_tokens=80, output_tokens=21)
+
+    call = fake.models.calls[0]
+    assert call["model"] == "gemini-2.5-flash"
+    system = call["config"].system_instruction
+    assert "差し戻し理由" in system
+    assert "K-01: レポートは結論→根拠の順で書き、冒頭に3行サマリーを置く" in system
+    fc = call["config"].tool_config.function_calling_config
+    assert fc.allowed_function_names == ["check_rule_conflicts"]
+
+
+async def test_check_rule_conflicts_skips_call_without_rules(patch_client):
+    """前回適用ルールが無ければ LLM を呼ばずに空で返す。"""
+    fake = patch_client()  # 応答なし = 呼ばれたら失敗する
+    result = await GeminiProvider().check_rule_conflicts("理由", [])
+    assert result.rule_ids == []
+    assert fake.models.calls == []
+
+
+# ---- execute への差し戻し理由の注入（#23） ------------------------------------------
+
+
+async def test_execute_injects_reject_reason_section(patch_client):
+    """直近の【差し戻し理由】コメントが「# 差し戻し理由（最優先で対処）」節として載る。"""
+    fake = patch_client(_text_response("# 修正版レポート"))
+    comments = [
+        {"who": "ai", "text": "完了しました。レビューをお願いします。"},
+        {"who": "human", "text": "【差し戻し理由】比較表は不要です。箇条書きにしてください"},
+    ]
+    await GeminiProvider().execute(_task(), _RULES, comments)
+
+    system = fake.models.calls[0]["config"].system_instruction
+    assert "# 差し戻し理由（最優先で対処）" in system
+    assert "比較表は不要です。箇条書きにしてください" in system
+
+
+async def test_execute_omits_reject_section_without_reject_comment(patch_client):
+    fake = patch_client(_text_response("# レポート"))
+    await GeminiProvider().execute(
+        _task(), _RULES, [{"who": "human", "text": "お願いします"}]
+    )
+    system = fake.models.calls[0]["config"].system_instruction
+    assert "# 差し戻し理由（最優先で対処）" not in system

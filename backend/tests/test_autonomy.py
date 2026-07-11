@@ -16,7 +16,7 @@ from app.ai.mock_provider import MockProvider
 from app.events import bus
 from app.jobs import execute as execute_mod
 from app.jobs import queue as jobs_queue
-from tests.helpers import db_connect, drain_events
+from tests.helpers import db_connect, drain_events, drain_jobs
 
 COST_CAP_COMMENT_1USD = (
     "コスト上限 $1 に達したため停止しました。上限を変更するか、人が引き継いでください。"
@@ -32,10 +32,10 @@ def zero_delays(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def captured_jobs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """assign-ai の enqueue をフェイク化（ジョブは手動で /internal/jobs/run を叩く）。"""
+    """enqueue をフェイク化（ジョブは手動で /internal/jobs/run を叩く。#23 連鎖も捕捉）。"""
     jobs: list[str] = []
 
-    async def _fake_enqueue(job_id: str) -> None:
+    async def _fake_enqueue(job_id: str, *, kind: str | None = None) -> None:
         jobs.append(job_id)
 
     monkeypatch.setattr(jobs_queue, "enqueue_job", _fake_enqueue)
@@ -171,20 +171,18 @@ async def test_execute_l0_hands_off_plan_to_you_todo(
 async def test_execute_l2_behaves_like_l1_for_now(
     api_client: httpx.AsyncClient, captured_jobs: list[str], zero_delays
 ) -> None:
-    """L2: #22 指揮者が入るまでは L1 と同じ（you_review・review レーン・成果物あり）。"""
+    """L2: assign-ai 起点では L1 と同じ（you_review・review レーン・成果物あり）。"""
     await api_client.patch("/api/tasks/T-104", json={"autonomy": "L2"})
-    res = await api_client.post("/api/tasks/T-104/assign-ai")
-    job_id = res.json()["jobId"]
-
-    run = await api_client.post("/internal/jobs/run", json={"jobId": job_id})
-    assert run.json() == {"status": "succeeded"}
+    await api_client.post("/api/tasks/T-104/assign-ai")
+    await drain_jobs(api_client, captured_jobs)  # execute→review 連鎖（#23）を完走
 
     conn = await db_connect()
     try:
         task = await conn.fetchrow("select * from tasks where human_id = 'T-104'")
         assert task["status"] == "you_review"
         assert task["lane_key"] == "review"
-        assert await conn.fetchval("select count(*) from artifacts") == 1
+        # 1回の revise を経て v1/v2 の2版（#23）
+        assert await conn.fetchval("select count(*) from artifacts") == 2
     finally:
         await conn.close()
 
@@ -195,15 +193,13 @@ async def test_execute_l2_behaves_like_l1_for_now(
 async def test_execute_l3_chains_to_done_with_auto_approve_comment(
     api_client: httpx.AsyncClient, captured_jobs: list[str], zero_delays, event_queue
 ) -> None:
-    """L3: ai_work→you_review→done を連鎖適用し、自動承認コメントで done レーンへ。"""
+    """L3: セルフレビュー（#23）の approve 後に you_review→done を連鎖適用（自動承認）。"""
     await api_client.patch("/api/tasks/T-104", json={"autonomy": "L3"})
     res = await api_client.post("/api/tasks/T-104/assign-ai")
     job_id = res.json()["jobId"]
     drain_events(event_queue)
 
-    run = await api_client.post("/internal/jobs/run", json={"jobId": job_id})
-    assert run.status_code == 200
-    assert run.json() == {"status": "succeeded"}
+    await drain_jobs(api_client, captured_jobs)  # execute→review→execute→review
 
     conn = await db_connect()
     try:
@@ -212,39 +208,40 @@ async def test_execute_l3_chains_to_done_with_auto_approve_comment(
         assert task["lane_key"] == "done"
         assert task["progress"] is None
 
-        # 成果物は通常どおり保存される（事後レビューできる）
-        artifacts = await conn.fetch("select * from artifacts where task_id = $1", task["id"])
-        assert len(artifacts) == 1
+        # 成果物は通常どおり保存される（事後レビューできる。revise を経て2版 #23）
+        artifacts = await conn.fetch(
+            "select * from artifacts where task_id = $1 order by version", task["id"]
+        )
+        assert len(artifacts) == 2
         assert str(artifacts[0]["job_id"]) == job_id
 
         comments = await conn.fetch(
             "select * from comments where task_id = $1 order by created_at", task["id"]
         )
-        assert len(comments) == 4  # 着手 → 中間 → 完了 → 自動承認
-        assert comments[3]["text"] == (
+        # 着手 → 中間 → 指摘(r) → 中間 → 承認(r) → 完了 → 自動承認
+        assert len(comments) == 7
+        assert comments[6]["text"] == (
             "ポリシーL3により自動承認しました。内容は事後確認できます。"
         )
-        assert comments[3]["agent_role"] == "executor"
+        assert comments[6]["agent_role"] == "executor"
 
         job = await conn.fetchrow("select * from ai_jobs where id = $1::uuid", job_id)
         assert job["status"] == "succeeded"
     finally:
         await conn.close()
 
-    # SSE: 連鎖（you_review → done）も順に配信され、FEフィードに経緯が残る
+    # SSE: 承認（reviewer）→ 完了 → you_review → 自動承認 → done の順で経緯が残る
     events = drain_events(event_queue)
-    assert [e["type"] for e in events] == [
-        "comment.created",  # 中間
-        "task.updated",  # progress 45
-        "artifact.created",
-        "comment.created",  # 完了
+    assert [e["type"] for e in events][-5:] == [
+        "comment.created",  # 承認（reviewer）
+        "comment.created",  # 完了（executor）
         "task.updated",  # you_review
-        "comment.created",  # 自動承認
+        "comment.created",  # 自動承認（executor）
         "task.updated",  # done
     ]
-    assert events[4]["payload"]["status"] == "you_review"
-    assert events[6]["payload"]["status"] == "done"
-    assert events[6]["payload"]["laneKey"] == "done"
+    assert events[-3]["payload"]["status"] == "you_review"
+    assert events[-1]["payload"]["status"] == "done"
+    assert events[-1]["payload"]["laneKey"] == "done"
 
 
 # ---- provider へのポリシー伝搬 ------------------------------------------------------

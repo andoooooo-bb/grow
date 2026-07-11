@@ -66,6 +66,7 @@ from app.events import (
 )
 from app.jobs import queue as jobs_queue
 from app.jobs.execute import JobNotFoundError, run_execute_job
+from app.jobs.review import run_review_job
 from app.repo import ai_jobs as ai_jobs_repo
 from app.repo import chat as chat_repo
 from app.repo import comments as comments_repo
@@ -87,6 +88,7 @@ ACTION_LABELS: dict[str, str] = {
     "hearing": "ヒアリング",
     "breakdown": "分解提案",
     "execute": "実行",
+    "review": "セルフレビュー",  # レビューAIへのリレー（#23）
     "handoff_human": "人へのハンドオフ",
     "done": "完了",
 }
@@ -112,7 +114,7 @@ STEP_LIMIT_COMMENT = (
 COST_CAP_COMMENT_TEMPLATE = (
     "コスト上限 ${cap} に達したため停止しました。上限を変更するか、人が引き継いでください。"
 )
-# execute 連鎖の失敗（実行AI自身の失敗コメント・you_todo 戻しは execute ジョブが行う）
+# execute/review 連鎖の失敗（各エージェント自身の失敗コメント・人戻しはジョブ側が行う）
 EXECUTE_FAILED_COMMENT = "実行AIの作業が失敗したため、オートパイロットを停止します。"
 # orchestrate 自体の失敗（判断不能）
 FAILURE_COMMENT_TEMPLATE = (
@@ -194,12 +196,19 @@ async def _orchestrate_attempt(job_id: str) -> None:
         )
         return
 
-    # 2) 現況の集約（status/autonomy/コメント履歴/壁打ち/成果物有無/子タスク）→ 次の一手
+    # 2) 現況の集約（status/autonomy/コメント履歴/壁打ち/成果物・レビュー有無/子タスク）
+    #    → 次の一手
     async with pool.acquire() as conn:
         history = await comments_repo.list_comments(conn, task_row)
         chat_messages = await chat_repo.list_chat_messages(conn, task_row)
         artifact_count = await conn.fetchval(
             "select count(*) from artifacts where task_id = $1", task_row["id"]
+        )
+        review_count = await conn.fetchval(
+            "select count(*) from ai_jobs "
+            "where task_id = $1 and kind = $2 and status = 'succeeded'",
+            task_row["id"],
+            AiJobKind.REVIEW.value,
         )
         child_rows = await conn.fetch(
             "select status from tasks where parent_id = $1 order by created_at",
@@ -211,11 +220,12 @@ async def _orchestrate_attempt(job_id: str) -> None:
     chat_dicts = [{"who": m.author.value, "text": m.text} for m in chat_messages]
     task_ctx = {
         **_task_prompt_dict(task_row),
-        # --- #22 指揮者の判断材料 ---
+        # --- #22/#23 指揮者の判断材料 ---
         "status": task_row["status"],
         "autonomy": task_row["autonomy"],
         "hasChat": bool(chat_messages),
         "hasArtifact": artifact_count > 0,
+        "hasReview": review_count > 0,  # セルフレビュー済みか（#23）
         "childStatuses": [r["status"] for r in child_rows],
     }
     decision = await get_provider().decide_next_action(
@@ -239,6 +249,8 @@ async def _orchestrate_attempt(job_id: str) -> None:
         await _act_breakdown(job_id, task_row, chat_dicts, rule_dicts, decision)
     elif decision.action == "execute":
         await _act_execute(job_id, task_row, decision)
+    elif decision.action == "review":
+        await _act_review(job_id, task_row, decision)
     elif decision.action == "handoff_human":
         await _act_handoff_human(job_id, task_row, decision)
     else:  # done
@@ -328,10 +340,14 @@ async def _act_execute(
 ) -> None:
     """assign-ai と同じ準備の上で既存 execute ジョブを起動する（外部挙動は不変, #10/#21）。
 
-    execute 完了後の続行判定（#21 オートノミー）:
+    #23: execute は成果物保存後に review ジョブ行を作る。指揮者は enqueue に頼らず
+    そのチェーン（review → revise なら再 execute → …）を同期リレーで消化してから
+    続行判定する（enqueue_next=False。キュー経由だと次判断と競合するため）。
+
+    チェーン完了後の続行判定（#21 オートノミー）:
         L0/L1 → 停止（L0 はプランのみ・L1 は you_review で人のレビュー待ち）
         L2/L3 → 自分（orchestrate）を再 enqueue してループ継続
-    execute が最終失敗した場合は execute 自身が人へハンドオフ済みなので、
+    execute/review が最終失敗した場合は各ジョブ自身が人へハンドオフ済みなので、
     指揮者は停止コメントだけ残してループを終了する。
     """
     pool = await get_pool()
@@ -392,10 +408,107 @@ async def _act_execute(
     for rule in applied_rules:
         publish_event(RULE_UPDATED, rule.model_dump(mode="json", by_alias=True))
 
-    # 既存 execute ジョブを起動（コミット後・進捗/成果物/you_review 遷移は execute が担う）。
-    # 失敗時の人戻し・失敗コメントも execute 自身が行う（§7.2）
-    ok = await run_execute_job(str(exec_job_row["id"]))
+    # 既存 execute ジョブを起動（コミット後・進捗/成果物は execute が担う）。
+    # 失敗時の人戻し・失敗コメントも execute 自身が行う（§7.2）。
+    # #23: review 連鎖は enqueue させず（enqueue_next=False）、続けて同期リレーで消化する
+    ok = await run_execute_job(str(exec_job_row["id"]), enqueue_next=False)
+    if ok:
+        ok = await _run_chain(task_row)
+    await _continue_after_chain(job_id, task_row, decision, ok)
 
+
+# ---- アクション: review（レビューAIへリレー #23） ------------------------------------
+
+
+async def _act_review(
+    job_id: str, task_row: asyncpg.Record, decision: NextActionResult
+) -> None:
+    """最新の成果物をレビューAIに検査させる（_act_execute と同型, #23）。
+
+    審査基準は直近 execute ジョブの適用ルール（無ければ retrieval で組み直す）。
+    revise なら review ジョブが execute を再起動する（ai_work へ差し戻し）ため、
+    チェーンを同期リレーで消化してから続行判定する。
+    """
+    pool = await get_pool()
+    comment = None
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await tasks_repo.get_task_row(conn, task_row["human_id"], for_update=True)
+            artifact_count = await conn.fetchval(
+                "select count(*) from artifacts where task_id = $1", row["id"]
+            )
+            if artifact_count == 0:
+                # 判断と現況が食い違った（成果物なし）。防御的に人へバトンを渡して停止
+                comment = await comments_repo.create_comment(
+                    conn,
+                    row,
+                    CommentCreate(
+                        author=Author.AI,
+                        text=HANDOFF_COMMENT,
+                        agent_role=AgentRole.CONDUCTOR,
+                    ),
+                )
+                task = await tasks_repo.apply_patch(conn, row, {})
+                await _mark_succeeded(conn, job_id, decision.usage)
+                review_job_row = None
+            else:
+                prev_rule_ids = await conn.fetchval(
+                    "select applied_rule_ids from ai_jobs "
+                    "where task_id = $1 and kind = 'execute' "
+                    "order by created_at desc limit 1",
+                    row["id"],
+                )
+                rule_ids = list(prev_rule_ids or [])
+                if not rule_ids:
+                    # execute 履歴なし（人が成果物だけ置いた等）: retrieval で審査基準を組む
+                    rule_ids = [r["id"] for r in await rules_repo.relevant_rules(conn, row)]
+                review_job_row = await ai_jobs_repo.create_job(
+                    conn, row, kind=AiJobKind.REVIEW, applied_rule_ids=rule_ids
+                )
+
+    if review_job_row is None:
+        publish_event(COMMENT_CREATED, comment.model_dump(mode="json", by_alias=True))
+        publish_event(TASK_UPDATED, task.model_dump(mode="json", by_alias=True))
+        return
+
+    ok = await run_review_job(str(review_job_row["id"]), enqueue_next=False)
+    if ok:
+        ok = await _run_chain(task_row)
+    await _continue_after_chain(job_id, task_row, decision, ok)
+
+
+async def _run_chain(task_row: asyncpg.Record) -> bool:
+    """queued の execute/review ジョブを直列に消化する（#23 同期リレー）。
+
+    enqueue はしない（enqueue_next=False で次のジョブ行だけが queued で積まれる）ため、
+    cloud_tasks の二重配信・local の並行実行と競合しない。すべて成功で True。
+    """
+    pool = await get_pool()
+    while True:
+        async with pool.acquire() as conn:
+            next_row = await conn.fetchrow(
+                "select * from ai_jobs where task_id = $1 and status = 'queued' "
+                "and kind in ('execute', 'review') order by created_at, id limit 1",
+                task_row["id"],
+            )
+        if next_row is None:
+            return True
+        if next_row["kind"] == AiJobKind.REVIEW.value:
+            ok = await run_review_job(str(next_row["id"]), enqueue_next=False)
+        else:
+            ok = await run_execute_job(str(next_row["id"]), enqueue_next=False)
+        if not ok:
+            return False
+
+
+async def _continue_after_chain(
+    job_id: str, task_row: asyncpg.Record, decision: NextActionResult, ok: bool
+) -> None:
+    """execute/review チェーン後の続行判定（#21/#23）。
+
+    失敗時は各ジョブが人へハンドオフ済みなので停止コメントだけ残す。
+    成功時はチェーン後の最新オートノミーで L2/L3 のみ次判断へ進む。
+    """
     pool = await get_pool()
     if not ok:
         await _post_conductor_comment(task_row, EXECUTE_FAILED_COMMENT)
@@ -403,7 +516,6 @@ async def _act_execute(
             await _mark_succeeded(conn, job_id, decision.usage)
         return
 
-    # 続行判定（#21）: execute 後の最新オートノミーで分岐する
     async with pool.acquire() as conn:
         autonomy = AutonomyLevel(
             await conn.fetchval(

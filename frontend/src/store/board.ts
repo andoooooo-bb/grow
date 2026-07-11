@@ -18,6 +18,7 @@ import {
   getLearnProposals,
   patchTask,
   promoteRule as promoteRuleRequest,
+  rejectTask as rejectTaskRequest,
   sendChatMessage,
   startChat as startChatRequest,
 } from '../lib/api.ts';
@@ -82,6 +83,7 @@ export interface BoardState {
   drafts: Record<string, string>; // コンポーザ入力
   chatDrafts: Record<string, string>; // 壁打ちコンポーザ入力（detail のコンポーザとは別持ち, #12）
   assigning: Record<string, boolean>; // taskId -> assign-ai 送信中（ボタン無効化, #10）
+  rejecting: Record<string, boolean>; // taskId -> reject 送信中（ボタン無効化, #23）
   confirming: Record<string, boolean>; // taskId -> breakdown/confirm 送信中（ボタン無効化, #12）
   learning: Record<string, boolean>; // taskId -> 「✧ 学ぶ」実行中（ボタン無効化, #14）
   // #20: ルール適用フラッシュ演出 — rule.updated（applied++）受信直後の ruleId -> 時刻(ms)。
@@ -153,6 +155,14 @@ export interface BoardActions {
    * 「AIにまかせる」とまとめて無効化。409（L0/コスト上限等）/失敗は boardError。
    */
   autopilot: (taskId: string) => Promise<void>;
+
+  // ---- 構造化差し戻し（#23） ----
+  /**
+   * POST /tasks/:id/reject {reason}。202 後の反映（理由コメント・ai_work 化・
+   * 再実行・矛盾ルールの確度降格）はすべて SSE に任せる。
+   * 送信中は rejecting フラグでボタンを無効化し、409/失敗は boardError。
+   */
+  reject: (taskId: string, reason: string) => Promise<void>;
 
   // ---- タスク別オートノミー（#21） ----
   /** L0-L3 ダイヤル: 楽観的更新 → PATCH {autonomy}。失敗はロールバック＋boardError */
@@ -259,6 +269,7 @@ export function createInitialBoardState(): BoardState {
     drafts: {},
     chatDrafts: {},
     assigning: {},
+    rejecting: {},
     confirming: {},
     learning: {},
     justApplied: {},
@@ -560,6 +571,29 @@ export const useBoardStore = create<BoardStore>()((set, get) => ({
       set({ boardError: 'オートパイロットを開始できませんでした' });
     } finally {
       set((st) => ({ assigning: { ...st.assigning, [taskId]: false } }));
+    }
+  },
+
+  // ---- 構造化差し戻し（#23） ----
+  reject: async (taskId, reason) => {
+    const trimmed = reason.trim();
+    if (trimmed === '') return; // 理由必須（フォーム側でも無効化）
+    const s = get();
+    if (s.rejecting[taskId] === true) return; // 二重送信防止（送信中はボタンも無効）
+    if (s.cards[taskId] === undefined) return;
+    set((st) => ({
+      rejecting: { ...st.rejecting, [taskId]: true },
+      boardError: null,
+    }));
+    try {
+      // 202 {jobId}。以降の進行（理由コメント・ai_work 化・レビューAIとの往復・
+      // 矛盾ルールの確度降格）はすべてサーバ起点の SSE が反映する
+      await rejectTaskRequest(taskId, { reason: trimmed });
+    } catch {
+      // 不正遷移（409）や通信失敗（§5.4）
+      set({ boardError: '差し戻しできませんでした' });
+    } finally {
+      set((st) => ({ rejecting: { ...st.rejecting, [taskId]: false } }));
     }
   },
 

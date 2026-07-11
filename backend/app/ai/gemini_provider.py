@@ -31,9 +31,12 @@ from app.ai.provider import (
     NextActionResult,
     ProposeRulesResult,
     ProposeSubtasksResult,
+    ReviewResult,
+    RuleConflictResult,
     RuleProposal,
     SubtaskProposal,
     TokenUsage,
+    latest_reject_reason,
 )
 from app.config import get_settings
 
@@ -81,6 +84,7 @@ NEXT_ACTIONS: tuple[NextAction, ...] = (
     "hearing",
     "breakdown",
     "execute",
+    "review",
     "handoff_human",
     "done",
 )
@@ -95,8 +99,8 @@ DECIDE_NEXT_ACTION_DECLARATION = types.FunctionDeclaration(
                 enum=list(NEXT_ACTIONS),
                 description=(
                     "hearing=前提の確認質問 / breakdown=サブタスク分解の提案 / "
-                    "execute=実行AIへ作業を依頼 / handoff_human=人へバトンを渡す / "
-                    "done=これ以上の作業はない"
+                    "execute=実行AIへ作業を依頼 / review=レビューAIに成果物を検査させる / "
+                    "handoff_human=人へバトンを渡す / done=これ以上の作業はない"
                 ),
             ),
             "reason": types.Schema(
@@ -105,6 +109,55 @@ DECIDE_NEXT_ACTION_DECLARATION = types.FunctionDeclaration(
             ),
         },
         required=["action", "reason"],
+    ),
+)
+
+REVIEW_ARTIFACT_TOOL_NAME = "review_artifact"
+REVIEW_VERDICTS: tuple[str, ...] = ("approve", "revise")
+REVIEW_ARTIFACT_DECLARATION = types.FunctionDeclaration(
+    name=REVIEW_ARTIFACT_TOOL_NAME,
+    description="実行AIの成果物を適用ルールに照らして検査し、approve / revise を判定する",
+    parameters=types.Schema(
+        type=types.Type.OBJECT,
+        properties={
+            "verdict": types.Schema(
+                type=types.Type.STRING,
+                enum=list(REVIEW_VERDICTS),
+                description=(
+                    "approve=人のレビューへ回してよい / revise=実行AIへ差し戻して修正させる"
+                ),
+            ),
+            "findings": types.Schema(
+                type=types.Type.ARRAY,
+                items=types.Schema(
+                    type=types.Type.STRING,
+                    description=(
+                        "実行AIへの具体的な修正指示（何がどのルールに反しているか、"
+                        "どう直すか）。approve のときは空配列"
+                    ),
+                ),
+            ),
+        },
+        required=["verdict", "findings"],
+    ),
+)
+
+CHECK_RULE_CONFLICTS_TOOL_NAME = "check_rule_conflicts"
+CHECK_RULE_CONFLICTS_DECLARATION = types.FunctionDeclaration(
+    name=CHECK_RULE_CONFLICTS_TOOL_NAME,
+    description="人の差し戻し理由と内容が矛盾している既存ルールを特定する",
+    parameters=types.Schema(
+        type=types.Type.OBJECT,
+        properties={
+            "ruleIds": types.Schema(
+                type=types.Type.ARRAY,
+                items=types.Schema(
+                    type=types.Type.STRING,
+                    description="矛盾が疑われるルールの id（例 K-01）。矛盾なしは空配列",
+                ),
+            ),
+        },
+        required=["ruleIds"],
     ),
 )
 
@@ -194,6 +247,16 @@ def _execute_system(
             "明示的に指示されなくても、必ずこれらを前提に作業してください。",
             "",
             rules_section,
+        ]
+    reject_reason = latest_reject_reason(comments)
+    if reject_reason is not None:
+        # #23 人の構造化差し戻し: 理由は「必ず対処すべき制約」として最優先で注入する
+        parts += [
+            "",
+            "# 差し戻し理由（最優先で対処）",
+            "前回の成果物は次の理由で差し戻されました。今回の作成では必ずこの指摘に対処し、",
+            "どう対処したかを成果物に明記してください。",
+            f"- {reject_reason}",
         ]
     parts += [
         "",
@@ -299,12 +362,68 @@ def _propose_rules_system(task: dict, comments: list[dict], chat: list[dict]) ->
     )
 
 
+def _review_artifact_system(task: dict, artifact_md: str, rules: list[dict]) -> str:
+    """#23 セルフレビューの system プロンプト（適用ルールを審査基準として注入）。"""
+    parts = [
+        "あなたは Grow のレビューエージェントです。実行AIが作成した成果物を、",
+        "人に渡す前に検査し、approve / revise を判定します。",
+        "",
+        "# 審査の原則",
+        "- 下記の「審査基準（適用ルール）」への違反は revise とし、"
+        "findings に「何がどのルールに反しているか・どう直すか」を具体的に書く。",
+        "- タスクの趣旨から明らかに外れた内容・重大な欠落も revise とする。",
+        "- 軽微な文体の揺れだけなら approve でよい（差し戻しを乱発しない）。",
+        "- findings は実行AIへの修正指示として書く（人向けの感想は書かない）。",
+    ]
+    rules_section = _rules_section(rules)
+    if rules_section:
+        parts += ["", "# 審査基準（適用ルール）", rules_section]
+    parts += [
+        "",
+        "# タスク",
+        f"タイトル: {task.get('title', '')}",
+        f"ラベル: {_labels(task)}",
+        "",
+        "# 検査対象の成果物",
+        artifact_md,
+        "",
+        f"必ず {REVIEW_ARTIFACT_TOOL_NAME} ツールを呼び出して結果を返してください。",
+    ]
+    return "\n".join(parts)
+
+
+def _check_rule_conflicts_system(reason: str, rules: list[dict]) -> str:
+    """#23 矛盾検出の system プロンプト（前回適用ルールと差し戻し理由を突き合わせる）。"""
+    entries = [
+        f"- {rule.get('id', '')}: {rule.get('text', '')}" for rule in rules if rule.get("id")
+    ]
+    return "\n".join(
+        [
+            "あなたは Grow の学習エージェントです。人の差し戻し理由を読み、",
+            "前回の実行に注入したルールのうち、理由と内容が矛盾しているもの",
+            "（ルールに従った結果が差し戻された・理由がルールの逆を求めている）を特定します。",
+            "",
+            "# 判定の原則",
+            "- 理由がルールの内容を否定・反転している場合のみ、そのルールの id を返す。",
+            "- 単にルールと無関係な指摘なら空配列を返す（無理に選ばない）。",
+            "",
+            "# 差し戻し理由",
+            reason,
+            "",
+            "# 前回適用したルール",
+            *(entries or ["（なし）"]),
+            "",
+            f"必ず {CHECK_RULE_CONFLICTS_TOOL_NAME} ツールを呼び出して結果を返してください。",
+        ]
+    )
+
+
 def _decide_next_action_system(task: dict, history: list[dict], rules: list[dict]) -> str:
     """#22 指揮者の判断 system プロンプト（現況キーは orchestrate ジョブが集約）。"""
     child_statuses = task.get("childStatuses") or []
     parts = [
         "あなたは Grow の指揮者エージェントです。タスクの現況を読み、",
-        "計画AI（ヒアリング・分解）・実行AI・人のどこへバトンを渡すべきか、",
+        "計画AI（ヒアリング・分解）・実行AI・レビューAI・人のどこへバトンを渡すべきか、",
         "次のアクションを1つだけ決定します。",
         "",
         "# 判断の原則",
@@ -312,6 +431,7 @@ def _decide_next_action_system(task: dict, history: list[dict], rules: list[dict
         "- 壁打ちで前提が揃った大きいタスクは breakdown で分解を提案する"
         "（ボードへの反映は人が承認する）。",
         "- 実行可能な状態なら execute で実行AIに任せる。",
+        "- 成果物がありセルフレビュー未実施なら review でレビューAIに検査させる（#23）。",
         "- 成果物のレビュー・意思決定など人にしかできない局面は handoff_human。",
         "- これ以上の作業がなければ done。",
         "",
@@ -322,6 +442,7 @@ def _decide_next_action_system(task: dict, history: list[dict], rules: list[dict
         f"オートノミー: {task.get('autonomy', '')}",
         f"壁打ち履歴: {'あり' if task.get('hasChat') else 'なし'}",
         f"成果物: {'あり' if task.get('hasArtifact') else 'なし'}",
+        f"セルフレビュー: {'実施済み' if task.get('hasReview') else '未実施'}",
         f"子タスクのステータス: {', '.join(child_statuses) if child_statuses else 'なし'}",
         "",
         "# これまでのやり取り（時系列）",
@@ -471,6 +592,35 @@ def _parse_rules(args: dict) -> list[RuleProposal]:
     return proposals
 
 
+def _parse_review(args: dict) -> tuple[str, list[str]]:
+    """review_artifact の引数を (verdict, findings) に変換する（自由文パース禁止）。"""
+    verdict = args.get("verdict")
+    findings = args.get("findings", [])
+    if verdict not in REVIEW_VERDICTS:
+        raise GeminiResponseError(f"review_artifact の verdict が不正です: {verdict!r}")
+    if not isinstance(findings, list) or not all(isinstance(f, str) for f in findings):
+        raise GeminiResponseError("review_artifact の findings が不正です")
+    if verdict == "revise" and not [f for f in findings if f]:
+        # 指摘なしの差し戻しは実行AIが対処できない（修正指示は必須）
+        raise GeminiResponseError("review_artifact の revise に findings がありません")
+    return verdict, [f for f in findings if f]
+
+
+def _parse_rule_conflicts(args: dict, valid_ids: set[str]) -> list[str]:
+    """check_rule_conflicts の引数を検証済み rule_ids に変換する（未知 id は捨てる）。"""
+    rule_ids = args.get("ruleIds")
+    if not isinstance(rule_ids, list) or not all(isinstance(r, str) for r in rule_ids):
+        raise GeminiResponseError("check_rule_conflicts の ruleIds が不正です")
+    seen: set[str] = set()
+    result: list[str] = []
+    for rule_id in rule_ids:
+        # 渡したルール以外の id（幻覚）は無視する（降格対象は実在ルールのみ）
+        if rule_id in valid_ids and rule_id not in seen:
+            seen.add(rule_id)
+            result.append(rule_id)
+    return result
+
+
 def _parse_next_action(args: dict) -> tuple[NextAction, str]:
     """decide_next_action の引数を (action, reason) に変換する（自由文パース禁止）。"""
     action = args.get("action")
@@ -615,6 +765,59 @@ class GeminiProvider(AiProvider):
         )
         return ChatReplyResult(
             text=_require_text(response, "chat_reply"), usage=_usage_from(response)
+        )
+
+    async def review_artifact(
+        self, task: dict, artifact_md: str, rules: list[dict]
+    ) -> ReviewResult:
+        """セルフレビュー（#23）: 適用ルールを審査基準に approve / revise を強制 FC で判定。
+
+        検査は軽量・高頻度（execute のたび）なので Flash 系（GEMINI_MODEL_LIGHT）を使う。
+        """
+        settings = get_settings()
+        response = await self._generate(
+            model=settings.gemini_model_light,
+            contents=_user_content(
+                f"上記の成果物を審査基準に照らして検査し、{REVIEW_ARTIFACT_TOOL_NAME} "
+                "ツールで判定を返してください。"
+            ),
+            config=self._forced_function_config(
+                system=_review_artifact_system(task, artifact_md, rules),
+                declaration=REVIEW_ARTIFACT_DECLARATION,
+            ),
+        )
+        args = _function_call_args(response, REVIEW_ARTIFACT_TOOL_NAME)
+        verdict, findings = _parse_review(args)
+        return ReviewResult(
+            verdict=verdict,  # type: ignore[arg-type]
+            findings=findings,
+            usage=_usage_from(response),
+        )
+
+    async def check_rule_conflicts(
+        self, reason: str, rules: list[dict]
+    ) -> RuleConflictResult:
+        """矛盾検出（#23）: 差し戻し理由と矛盾するルール id を強制 FC で特定する。"""
+        if not rules:
+            return RuleConflictResult(
+                rule_ids=[], usage=TokenUsage(input_tokens=0, output_tokens=0)
+            )
+        settings = get_settings()
+        response = await self._generate(
+            model=settings.gemini_model_light,
+            contents=_user_content(
+                f"上記の差し戻し理由と矛盾するルールを {CHECK_RULE_CONFLICTS_TOOL_NAME} "
+                "ツールで返してください（矛盾なしは空配列）。"
+            ),
+            config=self._forced_function_config(
+                system=_check_rule_conflicts_system(reason, rules),
+                declaration=CHECK_RULE_CONFLICTS_DECLARATION,
+            ),
+        )
+        args = _function_call_args(response, CHECK_RULE_CONFLICTS_TOOL_NAME)
+        valid_ids = {str(rule["id"]) for rule in rules if rule.get("id")}
+        return RuleConflictResult(
+            rule_ids=_parse_rule_conflicts(args, valid_ids), usage=_usage_from(response)
         )
 
     async def decide_next_action(

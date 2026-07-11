@@ -127,6 +127,12 @@ class AssignAiResponse(CamelModel):
     job_id: str
 
 
+class RejectRequest(CamelModel):
+    """POST /tasks/:id/reject（#23 人の構造化差し戻し）。理由は必須。"""
+
+    reason: str = Field(min_length=1)
+
+
 class JobsResponse(CamelModel):
     """GET /tasks/:id/jobs（#19 リレー・タイムライン。created_at 昇順 = リレー履歴）。"""
 

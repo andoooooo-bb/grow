@@ -4,11 +4,13 @@
 - 判断ループ（MockProvider の決定的な状態機械分岐）:
   (a) T-130（breakdown・chat空）→ hearing 判断 → 初期質問を自発投稿し spec で停止
   (a') T-130（壁打ち済み）→ breakdown 判断 → 候補を SSE 配信し人の承認待ちで停止（§1.6）
-  (b) T-112（queued・L1）→ execute 判断 → execute ジョブ連鎖 → you_review で必ず停止
+  (b) T-112（queued・L1）→ execute 判断 → 実行AI＋レビューAIの同期リレー（#23）
+      → you_review で必ず停止
   (c) T-112 L3 → execute → done まで自動 → 次判断で終了宣言
   (d) 実行回数上限（MAX_AUTOPILOT_STEPS）で強制停止＋「人にお返しします」コメント
   (e) コスト上限: エンドポイントの 409（enqueue 前）とループ内チェックの停止の両方
   (f) 判断理由コメントが毎ステップ（理由: …）付き・conductor ロールで残る
+  (g) レビュー未実施の成果物がある you_review タスク → review 判断（#23 _act_review）
 既存 assign-ai / execute の外部挙動は変えない（test_assign_ai / test_execute_job が担保）。
 """
 
@@ -22,6 +24,7 @@ from app.jobs import execute as execute_mod
 from app.jobs import orchestrate as orchestrate_mod
 from app.jobs import queue as jobs_queue
 from app.jobs import registry
+from app.jobs import review as review_mod
 from app.jobs.orchestrate import run_orchestrate_job_row
 from tests.helpers import db_connect, drain_events
 
@@ -33,6 +36,9 @@ REASON_BREAKDOWN = orchestrate_mod.REASON_COMMENT_TEMPLATE.format(
 )
 REASON_EXECUTE = orchestrate_mod.REASON_COMMENT_TEMPLATE.format(
     label="実行", reason=DECIDE_REASONS["execute"]
+)
+REASON_REVIEW = orchestrate_mod.REASON_COMMENT_TEMPLATE.format(
+    label="セルフレビュー", reason=DECIDE_REASONS["review"]
 )
 REASON_DONE = orchestrate_mod.REASON_COMMENT_TEMPLATE.format(
     label="完了", reason=DECIDE_REASONS["done"]
@@ -250,12 +256,14 @@ async def test_autopilot_breakdown_proposes_and_waits_for_human(
 async def test_autopilot_executes_then_stops_at_you_review_on_l1(
     api_client: httpx.AsyncClient, captured_jobs: list[str], zero_delays
 ) -> None:
-    """T-112（queued・既定L1）: execute 判断 → 実行AIへリレー → you_review 停止。"""
+    """T-112（queued・既定L1）: execute 判断 → 実行AI＋レビューAIの同期リレー（#23）
+    → you_review 停止。"""
     res = await api_client.post("/api/tasks/T-112/autopilot")
     assert res.status_code == 202
 
     await _drain_jobs(api_client, captured_jobs)
-    assert len(captured_jobs) == 1  # L1: 下書きまで。再 enqueue しない
+    # L1: 下書きまで。再 enqueue しない（execute→review 連鎖は同期リレーで消化済み）
+    assert len(captured_jobs) == 1
 
     conn = await db_connect()
     try:
@@ -264,17 +272,25 @@ async def test_autopilot_executes_then_stops_at_you_review_on_l1(
         assert task["lane_key"] == "review"
         assert task["progress"] is None
 
-        # 成果物は execute ジョブが通常どおり生成する（外部挙動は不変）
-        assert await conn.fetchval("select count(*) from artifacts") == 1
+        # 成果物は execute ジョブが通常どおり生成する（revise を経て2版 #23）
+        assert await conn.fetchval("select count(*) from artifacts") == 2
 
         jobs = await conn.fetch(
             "select * from ai_jobs where task_id = $1 order by created_at", task["id"]
         )
-        assert [j["kind"] for j in jobs] == ["orchestrate", "execute"]
+        assert [j["kind"] for j in jobs] == [
+            "orchestrate",
+            "execute",
+            "review",
+            "execute",
+            "review",
+        ]
         assert all(j["status"] == "succeeded" for j in jobs)
         # execute には assign-ai と同じ retrieval 済みルールが注入される
         # （T-112 labels=['ブログ'] → K-01 + 全体ルール K-02 / K-04 の3件）
         assert len(jobs[1]["applied_rule_ids"]) == 3
+        # revise 再実行は同じルールを引き継ぎ applied++ は重ねない（§6.3）
+        assert jobs[3]["applied_rule_ids"] == jobs[1]["applied_rule_ids"]
         assert await conn.fetchval("select count(*) from rule_applications") == 3
 
         comments = await conn.fetch(
@@ -284,12 +300,19 @@ async def test_autopilot_executes_then_stops_at_you_review_on_l1(
             orchestrate_mod.TAKEOVER_COMMENT,  # conductor
             REASON_EXECUTE,  # conductor（理由: …）
             execute_mod.PROGRESS_COMMENT,  # executor（リレー先の実行AI名義）
+            comments[3]["text"],  # レビューAIの指摘（下で検証）
+            execute_mod.PROGRESS_COMMENT,  # executor（修正）
+            review_mod.APPROVE_COMMENT,  # reviewer
             execute_mod.COMPLETE_COMMENT,  # executor
         ]
+        assert "【レビュー指摘】" in comments[3]["text"]
         assert [c["agent_role"] for c in comments] == [
             "conductor",
             "conductor",
             "executor",
+            "reviewer",
+            "executor",
+            "reviewer",
             "executor",
         ]
     finally:
@@ -319,7 +342,14 @@ async def test_autopilot_l2_continues_after_review_and_hands_off(
         jobs = await conn.fetch(
             "select * from ai_jobs where task_id = $1 order by created_at", task["id"]
         )
-        assert [j["kind"] for j in jobs] == ["orchestrate", "execute", "orchestrate"]
+        assert [j["kind"] for j in jobs] == [
+            "orchestrate",
+            "execute",
+            "review",
+            "execute",
+            "review",
+            "orchestrate",
+        ]
         assert all(j["status"] == "succeeded" for j in jobs)
 
         comments = await conn.fetch(
@@ -329,12 +359,15 @@ async def test_autopilot_l2_continues_after_review_and_hands_off(
             orchestrate_mod.TAKEOVER_COMMENT,
             REASON_EXECUTE,
             execute_mod.PROGRESS_COMMENT,
+            comments[3]["text"],  # レビューAIの指摘（#23）
+            execute_mod.PROGRESS_COMMENT,
+            review_mod.APPROVE_COMMENT,
             execute_mod.COMPLETE_COMMENT,
-            REASON_HANDOFF,  # 2周目の判断理由（conductor）
+            REASON_HANDOFF,  # 2周目の判断理由（conductor。hasReview=True → 人へ）
             orchestrate_mod.HANDOFF_COMMENT,  # バトンコメント（conductor）
         ]
-        assert comments[4]["agent_role"] == "conductor"
-        assert comments[5]["agent_role"] == "conductor"
+        assert comments[7]["agent_role"] == "conductor"
+        assert comments[8]["agent_role"] == "conductor"
     finally:
         await conn.close()
 
@@ -351,19 +384,26 @@ async def test_autopilot_l3_runs_to_done_automatically(
     assert res.status_code == 202
 
     await _drain_jobs(api_client, captured_jobs)
-    assert len(captured_jobs) == 2  # execute 完了後に自分を再 enqueue → 終了宣言で停止
+    assert len(captured_jobs) == 2  # チェーン完了後に自分を再 enqueue → 終了宣言で停止
 
     conn = await db_connect()
     try:
         task = await conn.fetchrow("select * from tasks where human_id = 'T-112'")
         assert task["status"] == "done"
         assert task["lane_key"] == "done"
-        assert await conn.fetchval("select count(*) from artifacts") == 1
+        assert await conn.fetchval("select count(*) from artifacts") == 2
 
         jobs = await conn.fetch(
             "select * from ai_jobs where task_id = $1 order by created_at", task["id"]
         )
-        assert [j["kind"] for j in jobs] == ["orchestrate", "execute", "orchestrate"]
+        assert [j["kind"] for j in jobs] == [
+            "orchestrate",
+            "execute",
+            "review",
+            "execute",
+            "review",
+            "orchestrate",
+        ]
         assert all(j["status"] == "succeeded" for j in jobs)
 
         comments = await conn.fetch(
@@ -373,13 +413,16 @@ async def test_autopilot_l3_runs_to_done_automatically(
             orchestrate_mod.TAKEOVER_COMMENT,
             REASON_EXECUTE,
             execute_mod.PROGRESS_COMMENT,
+            comments[3]["text"],  # レビューAIの指摘（#23）
+            execute_mod.PROGRESS_COMMENT,
+            review_mod.APPROVE_COMMENT,
             execute_mod.COMPLETE_COMMENT,
             execute_mod.AUTO_APPROVE_COMMENT,  # L3 自動承認（executor, #21）
             REASON_DONE,  # 2周目の判断理由（conductor）
             orchestrate_mod.DONE_CLOSING_COMMENT,  # 終了宣言（conductor）
         ]
-        assert comments[5]["agent_role"] == "conductor"
-        assert comments[6]["agent_role"] == "conductor"
+        assert comments[8]["agent_role"] == "conductor"
+        assert comments[9]["agent_role"] == "conductor"
     finally:
         await conn.close()
 
@@ -418,7 +461,14 @@ async def test_autopilot_stops_at_step_limit(
         jobs = await conn.fetch(
             "select * from ai_jobs where task_id = $1 order by created_at", task["id"]
         )
-        assert [j["kind"] for j in jobs] == ["orchestrate", "execute", "orchestrate"]
+        assert [j["kind"] for j in jobs] == [
+            "orchestrate",
+            "execute",
+            "review",
+            "execute",
+            "review",
+            "orchestrate",
+        ]
         assert all(j["status"] == "succeeded" for j in jobs)  # 上限停止も判断として成功
     finally:
         await conn.close()
@@ -504,5 +554,73 @@ async def test_autopilot_loop_stops_at_cost_cap(
         assert sorted(j["kind"] for j in jobs) == ["execute", "orchestrate"]
         orchestrate_job = next(j for j in jobs if j["kind"] == "orchestrate")
         assert orchestrate_job["status"] == "succeeded"
+    finally:
+        await conn.close()
+
+
+# ---- (g) review: レビュー未実施の成果物 → レビューAIへリレー（#23 _act_review） -------
+
+
+async def test_autopilot_reviews_unreviewed_artifact_then_stops(
+    api_client: httpx.AsyncClient, captured_jobs: list[str], zero_delays
+) -> None:
+    """T-091（you_review・成果物あり・レビュー未実施）: review 判断 → レビューAIが
+    revise で実行AIへ差し戻し → 修正 → approve → you_review で停止（L1）。"""
+    # 人の編集版として成果物だけを置く（execute 履歴なし・レビュー未実施の状態を再現）
+    res = await api_client.post(
+        "/api/tasks/T-091/artifacts", json={"contentMd": "# 確定申告サマリー（下書き）"}
+    )
+    assert res.status_code == 201
+
+    res = await api_client.post("/api/tasks/T-091/autopilot")
+    assert res.status_code == 202
+
+    await _drain_jobs(api_client, captured_jobs)
+    assert len(captured_jobs) == 1  # L1: レビュー往復は同期リレーで消化し停止
+
+    conn = await db_connect()
+    try:
+        task = await conn.fetchrow("select * from tasks where human_id = 'T-091'")
+        assert task["status"] == "you_review"
+        assert task["lane_key"] == "review"
+
+        jobs = await conn.fetch(
+            "select * from ai_jobs where task_id = $1 order by created_at", task["id"]
+        )
+        # review（revise）→ execute（修正）→ review（approve）
+        assert [j["kind"] for j in jobs] == ["orchestrate", "review", "execute", "review"]
+        assert all(j["status"] == "succeeded" for j in jobs)
+        # execute 履歴が無いため retrieval で審査基準を組む（T-091 labels=['経理'] → 3件）
+        assert len(jobs[1]["applied_rule_ids"]) == 3
+
+        comments = await conn.fetch(
+            "select * from comments where task_id = $1 order by created_at", task["id"]
+        )
+        assert [c["text"] for c in comments] == [
+            orchestrate_mod.TAKEOVER_COMMENT,
+            REASON_REVIEW,  # 「セルフレビュー」判断（conductor）
+            comments[2]["text"],  # レビューAIの指摘（revise → ai_work へ差し戻し）
+            execute_mod.PROGRESS_COMMENT,  # 実行AIの修正
+            review_mod.APPROVE_COMMENT,  # 承認（reviewer）
+            execute_mod.COMPLETE_COMMENT,  # 完了ハンドオフ（executor）
+        ]
+        assert "【レビュー指摘】" in comments[2]["text"]
+        assert [c["agent_role"] for c in comments] == [
+            "conductor",
+            "conductor",
+            "reviewer",
+            "executor",
+            "reviewer",
+            "executor",
+        ]
+
+        # 修正版（v2）が最新。人の下書き（v1）は残る
+        versions = await conn.fetch(
+            "select version, job_id from artifacts where task_id = $1 order by version",
+            task["id"],
+        )
+        assert [v["version"] for v in versions] == [1, 2]
+        assert versions[0]["job_id"] is None  # 人の編集版
+        assert versions[1]["job_id"] is not None  # 実行AIの修正版
     finally:
         await conn.close()

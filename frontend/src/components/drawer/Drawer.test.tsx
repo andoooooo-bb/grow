@@ -24,10 +24,18 @@ interface FetchStubOptions {
   assignAi?: () => unknown;
   /** POST /api/tasks/:id/autopilot の応答（省略時は 202 {jobId}。#22 指揮者AI） */
   autopilot?: () => unknown;
+  /** POST /api/tasks/:id/reject の応答（省略時は 202 {jobId}。#23 構造化差し戻し） */
+  reject?: (body: { reason: string }) => unknown;
 }
 
 /** ドロワーが叩く API（コメント・成果物・assign-ai）を受ける fetch スタブを差し込む */
-function installFetch({ comments = [], post, assignAi, autopilot }: FetchStubOptions = {}) {
+function installFetch({
+  comments = [],
+  post,
+  assignAi,
+  autopilot,
+  reject,
+}: FetchStubOptions = {}) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? 'GET';
@@ -56,6 +64,11 @@ function installFetch({ comments = [], post, assignAi, autopilot }: FetchStubOpt
     if (method === 'POST' && url.endsWith('/autopilot')) {
       if (autopilot) return autopilot();
       return jsonResponse(202, { jobId: 'job-2' });
+    }
+    if (method === 'POST' && url.endsWith('/reject')) {
+      const body = JSON.parse(String(init?.body)) as { reason: string };
+      if (reject) return reject(body);
+      return jsonResponse(202, { jobId: 'job-3' });
     }
     throw new Error(`unexpected fetch: ${method} ${url}`);
   });
@@ -440,6 +453,98 @@ describe('autopilot 結線と活性制御（#22: 指揮者AI）', () => {
       expect(useBoardStore.getState().boardError).toBe(
         'オートパイロットを開始できませんでした',
       ),
+    );
+  });
+});
+
+describe('reject 結線と理由入力（#23: 構造化差し戻し）', () => {
+  it('you_review のカードに「差し戻す」を表示し、理由を付けて POST /reject を呼ぶ', async () => {
+    const fetchMock = installFetch();
+    useBoardStore.getState().select('T-091'); // you_review
+    render(<Drawer />);
+    await waitForLoaded('T-091');
+
+    // ボタンで理由フォームが展開する
+    fireEvent.click(screen.getByRole('button', { name: '差し戻す' }));
+    const input = screen.getByLabelText('差し戻し理由');
+
+    // 理由が空のあいだは送信できない（理由必須）
+    expect(
+      screen.getByRole('button', { name: '理由を付けて差し戻す' }),
+    ).toBeDisabled();
+
+    fireEvent.change(input, { target: { value: '出典URLを追記してください' } });
+    fireEvent.click(screen.getByRole('button', { name: '理由を付けて差し戻す' }));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/tasks/T-091/reject',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ reason: '出典URLを追記してください' }),
+        }),
+      ),
+    );
+    // 202 後はローカルで状態を変えない（理由コメント・ai_work 化は SSE 反映待ち）
+    expect(useBoardStore.getState().cards['T-091'].status).toBe('you_review');
+    // 送信後はフォームが畳まれる
+    expect(screen.queryByLabelText('差し戻し理由')).not.toBeInTheDocument();
+  });
+
+  it('reviewing のカードにも「差し戻す」を表示する', async () => {
+    installFetch();
+    useBoardStore.getState().select('T-089'); // reviewing
+    render(<Drawer />);
+
+    expect(screen.getByRole('button', { name: '差し戻す' })).toBeInTheDocument();
+    await waitForLoaded('T-089');
+  });
+
+  it('レビュー局面以外（you_todo / done）では「差し戻す」を出さない', async () => {
+    installFetch();
+    useBoardStore.getState().select('T-109'); // you_todo
+    render(<Drawer />);
+    expect(screen.queryByRole('button', { name: '差し戻す' })).not.toBeInTheDocument();
+    await waitForLoaded('T-109');
+    cleanup();
+
+    installFetch();
+    useBoardStore.getState().select('T-080'); // done
+    render(<Drawer />);
+    expect(screen.queryByRole('button', { name: '差し戻す' })).not.toBeInTheDocument();
+    await waitForLoaded('T-080');
+  });
+
+  it('キャンセルでフォームを畳む（API は呼ばない）', async () => {
+    const fetchMock = installFetch();
+    useBoardStore.getState().select('T-091');
+    render(<Drawer />);
+    await waitForLoaded('T-091');
+
+    fireEvent.click(screen.getByRole('button', { name: '差し戻す' }));
+    fireEvent.click(screen.getByRole('button', { name: 'キャンセル' }));
+
+    expect(screen.queryByLabelText('差し戻し理由')).not.toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      '/api/tasks/T-091/reject',
+      expect.anything(),
+    );
+  });
+
+  it('reject の 409 で boardError を設定する', async () => {
+    installFetch({ reject: () => jsonResponse(409, {}) });
+    useBoardStore.getState().select('T-091');
+    render(<Drawer />);
+    await waitForLoaded('T-091');
+
+    fireEvent.click(screen.getByRole('button', { name: '差し戻す' }));
+    fireEvent.change(screen.getByLabelText('差し戻し理由'), {
+      target: { value: '直してください' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '理由を付けて差し戻す' }));
+
+    await waitFor(() =>
+      expect(useBoardStore.getState().boardError).toBe('差し戻しできませんでした'),
     );
   });
 });

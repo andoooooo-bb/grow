@@ -11,6 +11,7 @@ import type {
   CommentCreate,
   JobsResponse,
   LearnDecisionRequest,
+  RejectRequest,
   RuleProposalDto,
   TaskCreate,
   TaskPatch,
@@ -92,6 +93,15 @@ export function autopilot(taskId: string): Promise<AssignAiResponse> {
   return request<AssignAiResponse>(`/api/tasks/${taskId}/autopilot`, {
     method: 'POST',
   });
+}
+
+/**
+ * 理由付きで差し戻す（#23 構造化差し戻し）。202 {jobId}。
+ * you_review / reviewing 以外は 409。理由コメント・ai_work 化・再実行・
+ * 矛盾ルールの確度降格はすべて SSE（comment.created / task.updated / rule.updated）が届ける。
+ */
+export function rejectTask(taskId: string, body: RejectRequest): Promise<AssignAiResponse> {
+  return postJson<AssignAiResponse>(`/api/tasks/${taskId}/reject`, body);
 }
 
 /** 壁打ちメッセージ一覧を作成時刻の昇順で取得する（#12）。 */

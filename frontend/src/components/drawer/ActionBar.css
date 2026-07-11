@@ -1,11 +1,18 @@
 /* アクションバー（§3.3.2a）: padding 14px 18px, gap8px wrap, 下線 #f1f3f5 */
+/* #23: 差し戻し理由フォームを下に展開できるよう、ボタン行と縦積みの2段構成 */
 .action-bar {
   flex: none;
   padding: 14px 18px;
   display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-bottom: 1px solid var(--color-divider);
+}
+
+.action-bar__buttons {
+  display: flex;
   gap: 8px;
   flex-wrap: wrap;
-  border-bottom: 1px solid var(--color-divider);
 }
 
 .action-bar__button {
@@ -66,4 +73,52 @@
   color: var(--color-green-text);
   background: var(--color-green-bg);
   border: 1px solid var(--color-green-border);
+}
+
+/* 「差し戻す」（#23。レビューAIと同系のアンバー・警告トーン） */
+.action-bar__button--reject {
+  color: #92400e;
+  background: #fef3c7;
+  border: 1px solid #fde68a;
+}
+
+/* 差し戻し理由フォーム（#23。ボタン行の下に展開） */
+.action-bar__reject-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.action-bar__reject-input {
+  width: 100%;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 8px 10px;
+  border: 1px solid #fde68a;
+  border-radius: var(--radius-button);
+  background: #fffbeb;
+}
+
+.action-bar__reject-input:focus {
+  outline: 2px solid #f59e0b;
+  outline-offset: -1px;
+}
+
+.action-bar__reject-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.action-bar__button--reject-submit {
+  color: #fff;
+  background: #b45309;
+  border: none;
+}
+
+.action-bar__button--reject-cancel {
+  color: var(--color-text-sub, #6b7280);
+  background: transparent;
+  border: 1px solid var(--color-divider);
 }

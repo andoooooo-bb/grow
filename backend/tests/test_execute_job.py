@@ -3,6 +3,8 @@
 演出ディレイ・リトライバックオフは 0 秒に差し替え、
 worker エンドポイント POST /internal/jobs/run 経由で実行を検証する。
 local ランナー（asyncio.create_task）経路は test_local_runner_completes_job で検証。
+#23 以降、execute は成果物保存後に review ジョブを enqueue する（セルフレビュー連鎖）。
+mock は初回成果物を必ず1回 revise するため、完走 = execute→review→execute→review。
 """
 
 from uuid import uuid4
@@ -14,7 +16,7 @@ from app.config import get_settings
 from app.events import bus
 from app.jobs import execute as execute_mod
 from app.jobs import queue as jobs_queue
-from tests.helpers import db_connect, drain_events
+from tests.helpers import db_connect, drain_events, drain_jobs
 
 
 @pytest.fixture
@@ -26,10 +28,13 @@ def zero_delays(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def captured_jobs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """assign-ai の enqueue をフェイク化（ジョブは手動で /internal/jobs/run を叩く）。"""
+    """enqueue をフェイク化（ジョブは手動で /internal/jobs/run を叩く）。
+
+    execute → review → execute … の連鎖 enqueue（#23）もここに追記される。
+    """
     jobs: list[str] = []
 
-    async def _fake_enqueue(job_id: str) -> None:
+    async def _fake_enqueue(job_id: str, *, kind: str | None = None) -> None:
         jobs.append(job_id)
 
     monkeypatch.setattr(jobs_queue, "enqueue_job", _fake_enqueue)
@@ -57,14 +62,18 @@ class _FailingProvider:
 async def test_execute_job_success(
     api_client: httpx.AsyncClient, captured_jobs: list[str], zero_delays, event_queue
 ) -> None:
-    """完走: 中間コメント → artifacts v1 → you_review/review レーン/progress null → succeeded。"""
+    """完走（#23 セルフレビュー連鎖込み）: execute → review(revise) → execute → review(approve)。
+
+    外部最終状態は #23 以前と同じ: you_review・review レーン・progress null・
+    最後のコメントは実行AIの完了ハンドオフ。途中にレビューAIの指摘→修正が挟まる。
+    """
     res = await api_client.post("/api/tasks/T-104/assign-ai")
     job_id = res.json()["jobId"]
     drain_events(event_queue)  # assign 分のイベントは捨て、ジョブ分だけを検証する
 
-    run = await api_client.post("/internal/jobs/run", json={"jobId": job_id})
-    assert run.status_code == 200
-    assert run.json() == {"status": "succeeded"}
+    await drain_jobs(api_client, captured_jobs)
+    # execute → review → execute（revise 再実行）→ review（approve）の4ジョブ連鎖
+    assert len(captured_jobs) == 4
 
     conn = await db_connect()
     try:
@@ -75,62 +84,93 @@ async def test_execute_job_success(
         assert task["lane_key"] == "review"
         assert task["order_in_lane"] == 2
 
-        # コメント: 着手 → 中間 → 完了（文言は Grow.dc.html 準拠）
+        # コメント: 着手 → 中間 → レビュー指摘 → 中間（修正）→ 承認 → 完了
         comments = await conn.fetch(
             "select * from comments where task_id = $1 order by created_at", task["id"]
         )
-        assert len(comments) == 3
-        assert comments[1]["text"] == "作業を進めています…（途中経過を共有します）"
-        assert comments[2]["text"] == (
-            "完了しました。学習済みのルールに沿って仕上げています。レビューをお願いします。"
-        )
+        assert [c["text"] for c in comments] == [
+            comments[0]["text"],  # 着手（文言はルール数依存。role で検証）
+            "作業を進めています…（途中経過を共有します）",
+            comments[2]["text"],  # レビュー指摘（下で内容検証）
+            "作業を進めています…（途中経過を共有します）",
+            "セルフレビューを実施しました。適用ルールに照らして問題ありません。",
+            "完了しました。学習済みのルールに沿って仕上げています。レビューをお願いします。",
+        ]
+        assert [c["agent_role"] for c in comments] == [
+            "executor",
+            "executor",
+            "reviewer",  # AIがAIの成果物を突き返す（#23）
+            "executor",
+            "reviewer",
+            "executor",
+        ]
+        # 指摘は適用ルールを審査基準として引用する（【レビュー指摘】マーカー付き。
+        # 「出典」を含む先頭ルール = K-04 を引用する）
+        assert "【レビュー指摘】" in comments[2]["text"]
+        assert "社外向け文書は敬体。数値は必ず出典を明記する" in comments[2]["text"]
 
-        # artifacts: v1 が保存され、生成ジョブに紐づく。ルール文言が反映されている
+        # artifacts: v1（指摘前）と v2（修正版・レビュー対応セクション付き）
         artifacts = await conn.fetch(
             "select * from artifacts where task_id = $1 order by version", task["id"]
         )
-        assert len(artifacts) == 1
-        assert artifacts[0]["version"] == 1
+        assert [a["version"] for a in artifacts] == [1, 2]
         assert str(artifacts[0]["job_id"]) == job_id
         assert "競合SaaS 5社の料金プランを調査" in artifacts[0]["content_md"]
         assert "絵文字は使わない。文体は簡潔・断定調に統一する" in artifacts[0]["content_md"]
+        assert "## レビュー対応" not in artifacts[0]["content_md"]
+        assert "## レビュー対応" in artifacts[1]["content_md"]
 
-        # ai_jobs: succeeded ＋ トークン/コスト記録（§00 #16。mock は cost 0.0）
-        job = await conn.fetchrow("select * from ai_jobs where id = $1::uuid", job_id)
-        assert job["status"] == "succeeded"
-        assert job["input_tokens"] > 0
-        assert job["output_tokens"] > 0
-        assert float(job["cost_usd"]) == 0.0
-        assert job["finished_at"] is not None
-        assert job["error"] is None
+        # ai_jobs: execute → review → execute → review がすべて succeeded ＋ トークン記録
+        jobs = await conn.fetch(
+            "select * from ai_jobs where task_id = $1 order by created_at", task["id"]
+        )
+        assert [j["kind"] for j in jobs] == ["execute", "review", "execute", "review"]
+        assert all(j["status"] == "succeeded" for j in jobs)
+        assert str(jobs[0]["id"]) == job_id
+        for job in jobs:
+            assert job["input_tokens"] > 0
+            assert job["output_tokens"] > 0
+            assert float(job["cost_usd"]) == 0.0
+            assert job["finished_at"] is not None
+            assert job["error"] is None
+        # review は execute と同じ適用ルールを審査基準として引き継ぐ
+        assert jobs[1]["applied_rule_ids"] == jobs[0]["applied_rule_ids"]
+        assert len(jobs[0]["applied_rule_ids"]) == 4  # K-01/K-02/K-03/K-04
     finally:
         await conn.close()
 
-    # SSE: 中間（comment→task 45%）→ artifact.created → 完了（comment→task you_review）
+    # SSE: execute（中間→45%→v1）→ review 指摘 → execute（中間→45%→v2）→ 承認→完了→you_review
     events = drain_events(event_queue)
     assert [e["type"] for e in events] == [
-        "comment.created",
-        "task.updated",
-        "artifact.created",
-        "comment.created",
-        "task.updated",
+        "comment.created",  # 中間
+        "task.updated",  # progress 45
+        "artifact.created",  # v1
+        "comment.created",  # レビュー指摘（reviewer）
+        "task.updated",  # commentCount 同期
+        "comment.created",  # 中間（修正）
+        "task.updated",  # progress 45
+        "artifact.created",  # v2
+        "comment.created",  # 承認（reviewer）
+        "comment.created",  # 完了（executor）
+        "task.updated",  # you_review
     ]
     assert events[1]["payload"]["progress"] == 45
     assert events[1]["payload"]["status"] == "ai_work"
-    artifact_payload = events[2]["payload"]
-    assert artifact_payload["taskId"] == "T-104"
-    assert artifact_payload["version"] == 1
-    assert artifact_payload["jobId"] == job_id
-    assert artifact_payload["contentMd"].startswith("# ")
-    assert events[4]["payload"]["status"] == "you_review"
-    assert events[4]["payload"]["progress"] is None
-    assert events[4]["payload"]["laneKey"] == "review"
+    assert events[2]["payload"]["version"] == 1
+    assert events[2]["payload"]["jobId"] == job_id
+    assert events[3]["payload"]["agentRole"] == "reviewer"
+    assert "【レビュー指摘】" in events[3]["payload"]["text"]
+    assert events[7]["payload"]["version"] == 2
+    assert events[8]["payload"]["agentRole"] == "reviewer"
+    assert events[-1]["payload"]["status"] == "you_review"
+    assert events[-1]["payload"]["progress"] is None
+    assert events[-1]["payload"]["laneKey"] == "review"
 
 
 async def test_local_runner_completes_job(
     api_client: httpx.AsyncClient, zero_delays
 ) -> None:
-    """JOB_RUNNER=local: assign-ai だけでジョブが asyncio.create_task 経由で完走する。"""
+    """JOB_RUNNER=local: assign-ai だけで execute→review 連鎖が create_task 経由で完走する。"""
     assert get_settings().job_runner == "local"
     res = await api_client.post("/api/tasks/T-121/assign-ai")
     assert res.status_code == 202
@@ -144,11 +184,17 @@ async def test_local_runner_completes_job(
         version = await conn.fetchval(
             "select max(version) from artifacts where task_id = $1", task["id"]
         )
-        assert version == 1
-        status = await conn.fetchval(
-            "select status from ai_jobs where id = $1::uuid", res.json()["jobId"]
+        assert version == 2  # 1回の revise を経た修正版が最新（#23）
+        statuses = await conn.fetch(
+            "select kind, status from ai_jobs where task_id = $1 order by created_at",
+            task["id"],
         )
-        assert status == "succeeded"
+        assert [(r["kind"], r["status"]) for r in statuses] == [
+            ("execute", "succeeded"),
+            ("review", "succeeded"),
+            ("execute", "succeeded"),
+            ("review", "succeeded"),
+        ]
     finally:
         await conn.close()
 
@@ -209,10 +255,13 @@ async def test_execute_job_failure_retries_then_handoff(
 async def test_run_job_idempotent_after_success(
     api_client: httpx.AsyncClient, captured_jobs: list[str], zero_delays
 ) -> None:
-    """確定済みジョブの再実行（Cloud Tasks の二重配信相当）は no-op。"""
+    """確定済みジョブの再実行（Cloud Tasks の二重配信相当）は no-op。
+
+    execute の再実行で review ジョブ・成果物が二重に作られないこと（#23）も含む。
+    """
     res = await api_client.post("/api/tasks/T-104/assign-ai")
     job_id = res.json()["jobId"]
-    assert (await api_client.post("/internal/jobs/run", json={"jobId": job_id})).status_code == 200
+    await drain_jobs(api_client, captured_jobs)  # 連鎖（execute×2 + review×2）を完走
 
     rerun = await api_client.post("/internal/jobs/run", json={"jobId": job_id})
     assert rerun.status_code == 200
@@ -220,8 +269,11 @@ async def test_run_job_idempotent_after_success(
 
     conn = await db_connect()
     try:
-        assert await conn.fetchval("select count(*) from artifacts") == 1
-        assert await conn.fetchval("select count(*) from comments") == 3
+        assert await conn.fetchval("select count(*) from artifacts") == 2
+        assert await conn.fetchval("select count(*) from comments") == 6
+        assert (
+            await conn.fetchval("select count(*) from ai_jobs where kind = 'review'") == 2
+        )
     finally:
         await conn.close()
 

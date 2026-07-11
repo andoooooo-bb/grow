@@ -57,10 +57,16 @@ async def create_job(
     kind: AiJobKind = AiJobKind.EXECUTE,
     applied_rule_ids: Sequence[UUID] = (),
 ) -> asyncpg.Record:
-    """ジョブ行を作成する（status=queued）。トランザクション内で呼ぶこと。"""
+    """ジョブ行を作成する（status=queued）。トランザクション内で呼ぶこと。
+
+    created_at は clock_timestamp() で明示する（comments と同じ理由 —
+    既定の now() はトランザクション開始時刻のため、同一トランザクション内で
+    先に投稿したコメントより「過去」になり、セッション境界の集計
+    （orchestrate._session_step_count 等）が狂うのを防ぐ）。
+    """
     return await conn.fetchrow(
-        "insert into ai_jobs (task_id, kind, status, applied_rule_ids) "
-        "values ($1, $2, 'queued', $3::uuid[]) returning *",
+        "insert into ai_jobs (task_id, kind, status, applied_rule_ids, created_at) "
+        "values ($1, $2, 'queued', $3::uuid[], clock_timestamp()) returning *",
         task_row["id"],
         kind.value,
         list(applied_rule_ids),

@@ -3,8 +3,13 @@
 進行はプロトタイプ assignAI の擬似タイミング（§4.4: 1600ms→中間 / 4200ms→完了）を踏襲:
 
     running → (1.6s) progress=45 ＋ 中間コメント → (2.6s) AiProvider.execute
-    → artifacts 新版保存 → you_review・review レーンへ ＋ 完了コメント
-    → ai_jobs succeeded（トークン/コスト記録 §00 #16）
+    → artifacts 新版保存 → ai_jobs succeeded（トークン/コスト記録 §00 #16）
+    → review ジョブを enqueue（#23 セルフレビュー。タスクは ai_work のまま）
+
+you_review への遷移と完了コメントは review ジョブ（app/jobs/review.py）が
+approve 判定後に行う（#23）。revise なら本ジョブが再 enqueue され、修正版を作る。
+最終状態（you_review・完了コメント・L3 の done 連鎖）は #23 以前と同じ。
+L0（#21 計画のみ）は成果物を作らないためレビューを挟まず直接ハンドオフする。
 
 演出ディレイ・リトライ間隔はモジュール定数で注入可能（テストでは 0 秒に差し替える）。
 
@@ -28,14 +33,15 @@ from app.db import get_pool
 from app.domain.dto import CommentCreate
 from app.domain.models import (
     AgentRole,
+    AiJobKind,
     AiJobStatus,
     Author,
     AutonomyLevel,
-    LaneKey,
     TaskStatus,
 )
 from app.domain.state_machine import can_transition
 from app.events import ARTIFACT_CREATED, COMMENT_CREATED, TASK_UPDATED, publish_event
+from app.jobs import queue as jobs_queue
 from app.repo import ai_jobs as ai_jobs_repo
 from app.repo import comments as comments_repo
 from app.repo import rules as rules_repo
@@ -94,18 +100,22 @@ async def run_execute_job(
     *,
     max_retries: int | None = None,
     handoff_on_failure: bool = True,
+    enqueue_next: bool = True,
 ) -> bool:
     """execute ジョブを実行する（成功で True / 最終失敗で False）。
 
     - max_retries: ジョブ内リトライ回数（None は MAX_RETRIES）。cloud_tasks 経由は 0。
     - handoff_on_failure: 失敗し切ったとき人へのハンドオフ（you_todo 戻し＋失敗コメント）
       を行うか。cloud_tasks では Cloud Tasks の再試行が残っている間は False にする。
+    - enqueue_next: 成果物保存後の review ジョブ（#23）を enqueue するか。
+      False は #22 指揮者の同期リレー用（ジョブ行は作るが enqueue せず、
+      orchestrate 側が queued の行を直接消化する）。
     """
     retries = MAX_RETRIES if max_retries is None else max_retries
     last_error: Exception | None = None
     for attempt in range(retries + 1):
         try:
-            await _execute_attempt(job_id)
+            await _execute_attempt(job_id, enqueue_next=enqueue_next)
             return True
         except JobNotFoundError:
             raise
@@ -122,7 +132,7 @@ async def run_execute_job(
 # ---- 1試行分の実行 ---------------------------------------------------------------
 
 
-async def _execute_attempt(job_id: str) -> None:
+async def _execute_attempt(job_id: str, *, enqueue_next: bool = True) -> None:
     pool = await get_pool()
 
     # 0) ジョブと対象タスクをロードして running へ
@@ -174,12 +184,11 @@ async def _execute_attempt(job_id: str) -> None:
         plan_only=autonomy is AutonomyLevel.L0,
     )
 
-    # 3) 完了処理はオートノミーで分岐する（#21）:
+    # 3) 完了処理はオートノミーで分岐する（#21/#23）:
     #    - L0: 成果物は作らず、実行プランをコメントで渡して you_todo へハンドオフ
-    #    - L1: 現行どおり you_review へ（下書きまで）
-    #    - L2: 現段階では L1 と同挙動。#22 指揮者が「プラン承認後は完了まで自動」を
-    #      実現する（指揮者は you_review 到達時に autonomy=L2 を見て自動リレーへ接続）
-    #    - L3: you_review 適用後、同一トランザクションで done まで連鎖適用（自動承認）
+    #    - L1-L3: 成果物を新版として保存し、タスクは ai_work のまま review ジョブへ
+    #      リレーする（#23 セルフレビュー）。you_review への遷移・完了コメント・
+    #      L3 の done 連鎖は review ジョブが approve 判定後に行う。
     if autonomy is AutonomyLevel.L0:
         await _handoff_plan(job_id, task_row, result)
         return
@@ -189,59 +198,18 @@ async def _execute_attempt(job_id: str) -> None:
             row = await tasks_repo.get_task_row(conn, task_row["human_id"], for_update=True)
             current = TaskStatus(row["status"])
             if not can_transition(current, TaskStatus.YOU_REVIEW):
+                # 完了ハンドオフ（review ジョブが行う）が成立しない状態なら保存しない
                 raise RuntimeError(
                     f"invalid transition on job completion: {current} -> you_review"
                 )
             artifact = await create_artifact(conn, row, result.content_md, job_id=job_id)
-            comment = await comments_repo.create_comment(
+            # セルフレビュー（#23）: 同じ適用ルールを審査基準として review ジョブに引き継ぐ
+            review_job_row = await ai_jobs_repo.create_job(
                 conn,
                 row,
-                CommentCreate(
-                    author=Author.AI,
-                    text=COMPLETE_COMMENT,
-                    agent_role=AgentRole.EXECUTOR,  # 完了ハンドオフも実行AIの名義（#19）
-                ),
+                kind=AiJobKind.REVIEW,
+                applied_rule_ids=list(job_row["applied_rule_ids"]),
             )
-            # §5.6 不変条件: ai_work 以外では progress は null
-            task = await tasks_repo.apply_patch(
-                conn,
-                row,
-                {
-                    "status": TaskStatus.YOU_REVIEW,
-                    "progress": None,
-                    "lane_key": LaneKey.REVIEW,
-                },
-            )
-            # L3（#21）: ai_work→you_review→done を連鎖適用（ALLOWED_TRANSITIONS は不変。
-            # you_review→done は §5.6 の「承認」遷移をそのまま使う）
-            auto_comment = None
-            done_task = None
-            if autonomy is AutonomyLevel.L3:
-                row = await tasks_repo.get_task_row(
-                    conn, task_row["human_id"], for_update=True
-                )
-                if not can_transition(TaskStatus(row["status"]), TaskStatus.DONE):
-                    raise RuntimeError(
-                        f"invalid transition on auto-approve: {row['status']} -> done"
-                    )
-                auto_comment = await comments_repo.create_comment(
-                    conn,
-                    row,
-                    CommentCreate(
-                        author=Author.AI,
-                        text=AUTO_APPROVE_COMMENT,
-                        agent_role=AgentRole.EXECUTOR,  # 自動承認も実行AIの名義（#19）
-                    ),
-                )
-                done_task = await tasks_repo.apply_patch(
-                    conn,
-                    row,
-                    {
-                        "status": TaskStatus.DONE,
-                        "progress": None,
-                        "lane_key": LaneKey.DONE,
-                    },
-                )
             # mock は usage をそのまま記録し cost 0.0（実コスト算定は Gemini 実装 #15 で）
             await ai_jobs_repo.mark_succeeded(
                 conn,
@@ -251,12 +219,11 @@ async def _execute_attempt(job_id: str) -> None:
                 cost_usd=0.0,
             )
     publish_event(ARTIFACT_CREATED, artifact.model_dump(mode="json", by_alias=True))
-    publish_event(COMMENT_CREATED, comment.model_dump(mode="json", by_alias=True))
-    publish_event(TASK_UPDATED, task.model_dump(mode="json", by_alias=True))
-    if auto_comment is not None and done_task is not None:
-        # L3 の連鎖（you_review → done）も順に配信し、FEフィードに経緯を残す
-        publish_event(COMMENT_CREATED, auto_comment.model_dump(mode="json", by_alias=True))
-        publish_event(TASK_UPDATED, done_task.model_dump(mode="json", by_alias=True))
+    if enqueue_next:
+        # コミット後に enqueue（review ジョブは別コネクションで行を読むため）
+        await jobs_queue.enqueue_job(
+            str(review_job_row["id"]), kind=AiJobKind.REVIEW.value
+        )
 
 
 # ---- L0: 実行プランを渡して人へハンドオフ（#21） -----------------------------------

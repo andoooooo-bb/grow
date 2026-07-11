@@ -74,8 +74,33 @@ class ChatReplyResult:
     usage: TokenUsage
 
 
-# 指揮者エージェント（#22）が選べる次アクションの候補
-NextAction = Literal["hearing", "breakdown", "execute", "handoff_human", "done"]
+@dataclass(frozen=True, slots=True)
+class ReviewResult:
+    """セルフレビュー（#23 review_artifact）の判定結果。
+
+    - verdict: approve（人のレビューへ回してよい）| revise（実行AIへ差し戻す）
+    - findings: revise のとき実行AIに伝える指摘（approve なら空でよい）
+    """
+
+    verdict: Literal["approve", "revise"]
+    findings: list[str]
+    usage: TokenUsage
+
+
+@dataclass(frozen=True, slots=True)
+class RuleConflictResult:
+    """差し戻し理由とルールの矛盾判定（#23 check_rule_conflicts）。
+
+    rule_ids は矛盾が疑われるルールの id（rules dict の "id" = human_id 例 "K-01"）。
+    矛盾なしは空リスト。
+    """
+
+    rule_ids: list[str]
+    usage: TokenUsage
+
+
+# 指揮者エージェント（#22/#23）が選べる次アクションの候補
+NextAction = Literal["hearing", "breakdown", "execute", "review", "handoff_human", "done"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +110,7 @@ class NextActionResult:
     - hearing: 前提が不明。壁打ちの初期質問で人に確認する
     - breakdown: 前提が揃った。サブタスク分解を提案する（反映は人の承認 §1.6）
     - execute: 実行可能。実行AI（execute ジョブ）に作業を任せる
+    - review: 成果物はあるがセルフレビュー未実施。レビューAIに検査させる（#23）
     - handoff_human: AIだけでは進められない。人へバトンを渡す
     - done: これ以上の作業はない（完了扱いは呼び出し側がオートノミーで分岐）
     """
@@ -92,6 +118,26 @@ class NextActionResult:
     action: NextAction
     reason: str
     usage: TokenUsage
+
+
+# ---- コメント本文の構造化マーカー（#23。ジョブ/ルーターと provider 実装の共有契約） ----
+# 人の構造化差し戻し理由（routers/ai.py reject が human コメント先頭に付ける）
+REJECT_REASON_PREFIX = "【差し戻し理由】"
+# レビューAIの指摘（jobs/review.py が revise 時の REVIEWER コメントに含める）
+REVIEW_FINDINGS_MARKER = "【レビュー指摘】"
+
+
+def latest_reject_reason(comments: list[dict]) -> str | None:
+    """コメント履歴から直近の差し戻し理由を取り出す（無ければ None）。
+
+    execute 系プロンプトの「# 差し戻し理由（最優先で対処）」節の材料（#23）。
+    comments は {"who", "text"} の時系列リスト。
+    """
+    for comment in reversed(comments):
+        text = comment.get("text", "")
+        if REJECT_REASON_PREFIX in text:
+            return text.split(REJECT_REASON_PREFIX, 1)[1].strip()
+    return None
 
 
 class AiProvider(ABC):
@@ -136,13 +182,35 @@ class AiProvider(ABC):
         """壁打ち応答（§7.4a）: 初回は前提確認の質問、以降は分解へ誘導する応答。"""
 
     @abstractmethod
+    async def review_artifact(
+        self, task: dict, artifact_md: str, rules: list[dict]
+    ) -> ReviewResult:
+        """セルフレビュー（#23）: 適用ルールを審査基準に成果物を検査する。
+
+        実行AIの成果物（artifact_md）がルール・タスクの趣旨を満たすかを
+        レビューAIが自分で判定する。revise のとき findings に「何をどう直すか」を
+        実行AIへの指示として返す（review ジョブがコメント投稿→再実行に使う）。
+        """
+
+    @abstractmethod
+    async def check_rule_conflicts(
+        self, reason: str, rules: list[dict]
+    ) -> RuleConflictResult:
+        """矛盾検出（#23）: 人の差し戻し理由と矛盾するルールを特定する。
+
+        reason は人の差し戻し理由（自由文）、rules は前回 execute に注入した
+        ルール（rule_prompt_dict）。理由がルールの内容を否定している場合に
+        該当ルールの id を返す（呼び出し側が confidence を1段降格する）。
+        """
+
+    @abstractmethod
     async def decide_next_action(
         self, task: dict, history: list[dict], rules: list[dict]
     ) -> NextActionResult:
         """指揮者の次の一手（#22）: タスク現況から次アクションを1つ選ぶ。
 
         task には基本キー（id/humanId/title/labels）に加え、判断材料として
-        status / autonomy / hasChat / hasArtifact / childStatuses を含める
-        （orchestrate ジョブが現況を集約して渡す）。history はコメント履歴
+        status / autonomy / hasChat / hasArtifact / hasReview / childStatuses を
+        含める（orchestrate ジョブが現況を集約して渡す）。history はコメント履歴
         （who/text）、rules は retrieval 済みルール。
         """

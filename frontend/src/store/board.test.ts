@@ -559,6 +559,79 @@ describe('assignAi（#10: §5.3）', () => {
   });
 });
 
+describe('reject（#23: 構造化差し戻し）', () => {
+  beforeEach(() => {
+    useBoardStore.setState({ ...createInitialBoardState(), ...boardFixture() });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('POST /api/tasks/:id/reject {reason} を呼び、202 後はローカル状態を変えない', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(202, { jobId: 'job-9' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await useBoardStore.getState().reject('T-091', ' 出典URLを追記してください ');
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/tasks/T-091/reject',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ reason: '出典URLを追記してください' }), // trim して送る
+      }),
+    );
+    const s = useBoardStore.getState();
+    // 楽観的更新しない: 理由コメント・ai_work 化・確度降格は SSE が届いて反映される
+    expect(s.cards['T-091'].status).toBe('you_review');
+    expect(s.rejecting['T-091']).toBe(false); // 完了後フラグ解除
+    expect(s.boardError).toBeNull();
+  });
+
+  it('空白のみの理由は API を呼ばない（理由必須）', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    await useBoardStore.getState().reject('T-091', '   ');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('送信中は rejecting フラグが立ち、二重送信しない', async () => {
+    let resolvePost!: (value: unknown) => void;
+    const fetchMock = vi.fn(
+      (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Promise((resolve) => (resolvePost = resolve)),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const first = useBoardStore.getState().reject('T-091', '直してください');
+    expect(useBoardStore.getState().rejecting['T-091']).toBe(true);
+
+    const second = useBoardStore.getState().reject('T-091', '直してください');
+    resolvePost(jsonResponse(202, { jobId: 'job-9' }));
+    await Promise.all([first, second]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(useBoardStore.getState().rejecting['T-091']).toBe(false);
+  });
+
+  it('409（レビュー局面以外）で boardError を設定する', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(409, {})));
+
+    await useBoardStore.getState().reject('T-091', '直してください');
+
+    const s = useBoardStore.getState();
+    expect(s.boardError).toBe('差し戻しできませんでした');
+    expect(s.rejecting['T-091']).toBe(false);
+  });
+
+  it('存在しないカードは API を呼ばない', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    await useBoardStore.getState().reject('T-999', '直してください');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
 // ---- 成果物（#10: §00 #2 / §3.3.2 c-2） ----
 
 const ARTIFACT_AT = '2026-07-07T01:00:00Z';

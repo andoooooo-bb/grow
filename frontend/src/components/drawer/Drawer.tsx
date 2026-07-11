@@ -29,9 +29,13 @@ export function Drawer() {
   const markDone = useBoardStore((s) => s.markDone);
   const assignAi = useBoardStore((s) => s.assignAi);
   const autopilot = useBoardStore((s) => s.autopilot);
+  const reject = useBoardStore((s) => s.reject);
   const startChat = useBoardStore((s) => s.startChat);
   const assigning = useBoardStore((s) =>
     s.selectedId !== null ? (s.assigning[s.selectedId] ?? false) : false,
+  );
+  const rejecting = useBoardStore((s) =>
+    s.selectedId !== null ? (s.rejecting[s.selectedId] ?? false) : false,
   );
 
   // ドロワーを開いたらスレッド（#7）と成果物（#10）を読み込む
@@ -52,6 +56,8 @@ export function Drawer() {
   // 「オートパイロット」（#22 指揮者AI）: assign-ai と同条件 ＋ L0（計画のみ #21）は無効
   const isPlanOnly = taskAutonomy(task) === 'L0';
   const canAutopilot = canAssignAi && !isPlanOnly;
+  // 「差し戻す」（#23）: 人のレビュー局面（you_review / reviewing）でのみ表示
+  const canReject = task.status === 'you_review' || task.status === 'reviewing';
 
   return (
     <aside className="drawer">
@@ -72,6 +78,10 @@ export function Drawer() {
             onMarkDone={
               task.status !== 'done' ? () => void markDone(task.id) : undefined
             }
+            onReject={
+              canReject ? (reason) => void reject(task.id, reason) : undefined
+            }
+            rejectDisabled={rejecting}
           />
           {/* (b) 適用ルール（§3.3.2b, #10）: retrieval 0件時はコンポーネント側で非表示 */}
           <AppliedRules task={task} />

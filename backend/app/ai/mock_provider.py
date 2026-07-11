@@ -12,6 +12,7 @@ usage は入力・出力の文字数から決定的に算出する（文字数 /
 import json
 
 from app.ai.provider import (
+    REVIEW_FINDINGS_MARKER,
     AiProvider,
     ChatReplyResult,
     ExecuteResult,
@@ -19,9 +20,12 @@ from app.ai.provider import (
     NextActionResult,
     ProposeRulesResult,
     ProposeSubtasksResult,
+    ReviewResult,
+    RuleConflictResult,
     RuleProposal,
     SubtaskProposal,
     TokenUsage,
+    latest_reject_reason,
 )
 
 # --- 壁打ち文言（§7.4a / 05 §5.3 / プロト greetings・sendChat） ---
@@ -100,10 +104,23 @@ DECIDE_REASONS: dict[str, str] = {
     "hearing": "前提が未確認のため、まずヒアリングで要件を確認します",
     "breakdown": "壁打ちで前提が揃ったため、サブタスクへの分解を提案します",
     "execute": "実行可能な状態のため、実行AIに作業を任せます",
+    "review": "成果物のセルフレビューが未実施のため、レビューAIに検査させます",
     "handoff_review": "成果物のレビューと承認は人の判断が必要です",
     "handoff_unknown": "AIだけでは進められない状態のため、人にお返しします",
     "done": "成果物まで完了済みのため、これ以上の作業はありません",
 }
+
+# --- セルフレビュー（#23。デモで確実に「1回 revise → 修正 → approve」が見える分岐） ---
+
+# 修正版レポートに現れる対応セクション（review_artifact はこれで修正済みと判定する）
+REVIEW_FIXED_SECTION = "## レビュー対応"
+REJECT_FIXED_SECTION = "## 差し戻し対応"
+
+# revise 時の指摘（適用ルールがあれば先頭ルールを審査基準として引用する）
+REVIEW_FINDING_WITH_RULE_TEMPLATE = (
+    "比較表に出典URL列がありません。ルール「{rule}」に沿って追記してください"
+)
+REVIEW_FINDING_GENERIC = "比較表に出典URL列がありません。出典を明記して追記してください"
 
 
 class MockProvider(AiProvider):
@@ -123,7 +140,9 @@ class MockProvider(AiProvider):
             # L0（#21）: 成果物は作らず「実行プラン」だけを返す
             content_md = self._build_plan(task, rules)
         else:
-            content_md = self._build_report(task, rules, allow_web_search=allow_web_search)
+            content_md = self._build_report(
+                task, rules, comments, allow_web_search=allow_web_search
+            )
         return ExecuteResult(
             content_md=content_md,
             usage=self._usage(content_md, task, rules, comments),
@@ -179,11 +198,13 @@ class MockProvider(AiProvider):
         """指揮者の次アクション（#22）: タスク現況からの決定的な状態機械分岐。
 
         LLM を使わず、orchestrate ジョブが集約した現況キー
-        （status / hasChat / hasArtifact）だけで判断する（同じ入力には常に同じ出力）。
+        （status / hasChat / hasArtifact / hasReview）だけで判断する
+        （同じ入力には常に同じ出力）。
         """
         status = task.get("status")
         has_chat = bool(task.get("hasChat"))
         has_artifact = bool(task.get("hasArtifact"))
+        has_review = bool(task.get("hasReview"))
 
         action: NextAction
         if status == "done":
@@ -195,6 +216,9 @@ class MockProvider(AiProvider):
             action, reason_key = "breakdown", "breakdown"
         elif status in ("queued", "you_todo"):
             action, reason_key = "execute", "execute"
+        elif status in ("you_review", "reviewing") and has_artifact and not has_review:
+            # 成果物はあるがセルフレビュー未実施 → 人に渡す前にレビューAIへ（#23）
+            action, reason_key = "review", "review"
         elif status in ("you_review", "reviewing") and has_artifact:
             action, reason_key = "handoff_human", "handoff_review"
         else:
@@ -204,6 +228,51 @@ class MockProvider(AiProvider):
             action=action,
             reason=reason,
             usage=self._usage(f"{action}:{reason}", task, history, rules),
+        )
+
+    async def review_artifact(
+        self, task: dict, artifact_md: str, rules: list[dict]
+    ) -> ReviewResult:
+        """セルフレビュー（#23）: 決定的な approve / revise 判定。
+
+        - 成果物に対応セクション（## レビュー対応 / ## 差し戻し対応）がある =
+          指摘・差し戻し既往に対応済み → approve
+        - 初回 execute 直後（対応セクションなし = v1 相当）→ revise 1回。
+          指摘は適用ルールを審査基準として引用する（デモで必ず1往復見える）。
+        """
+        if REVIEW_FIXED_SECTION in artifact_md or REJECT_FIXED_SECTION in artifact_md:
+            verdict: str = "approve"
+            findings: list[str] = []
+        else:
+            verdict = "revise"
+            rule_texts = [r.get("text", "") for r in rules if r.get("text")]
+            # 指摘は「出典」に言及するルールを優先して引用する（指摘文との整合）
+            cited = next((t for t in rule_texts if "出典" in t), None)
+            if cited is None and rule_texts:
+                cited = rule_texts[0]
+            findings = [
+                REVIEW_FINDING_WITH_RULE_TEMPLATE.format(rule=cited)
+                if cited
+                else REVIEW_FINDING_GENERIC
+            ]
+        return ReviewResult(
+            verdict=verdict,  # type: ignore[arg-type]
+            findings=findings,
+            usage=self._usage(f"{verdict}:{findings}", task, artifact_md, rules),
+        )
+
+    async def check_rule_conflicts(
+        self, reason: str, rules: list[dict]
+    ) -> RuleConflictResult:
+        """矛盾検出（#23）: 理由が「ルール」「逆」に言及していれば先頭ルールを返す決定的分岐。"""
+        rule_ids: list[str] = []
+        if rules and any(keyword in reason for keyword in ("ルール", "逆")):
+            first_id = rules[0].get("id")
+            if first_id:
+                rule_ids = [first_id]
+        return RuleConflictResult(
+            rule_ids=rule_ids,
+            usage=self._usage(",".join(rule_ids) or "none", reason, rules),
         )
 
     # --- 内部ヘルパ ---
@@ -246,8 +315,38 @@ class MockProvider(AiProvider):
         return "\n".join(lines)
 
     @classmethod
+    def _revision_sections(cls, comments: list[dict]) -> list[str]:
+        """差し戻し・レビュー指摘への対応セクション（#23。該当履歴がなければ空）。
+
+        - 人の差し戻し（【差し戻し理由】…）→「## 差し戻し対応」に理由の全文を引用
+          （再実行の成果物に理由が反映されたことを検証可能にする）
+        - レビューAIの指摘（【レビュー指摘】…）→「## レビュー対応」
+        review_artifact はこれらのセクションの有無で修正済みかを判定する。
+        """
+        lines: list[str] = []
+        reject_reason = latest_reject_reason(comments)
+        if reject_reason is not None:
+            lines += [
+                REJECT_FIXED_SECTION,
+                f"差し戻し理由「{reject_reason}」を最優先で反映した。",
+                "",
+            ]
+        if any(REVIEW_FINDINGS_MARKER in c.get("text", "") for c in comments):
+            lines += [
+                REVIEW_FIXED_SECTION,
+                "レビューAIの指摘に対応し、比較表に出典URL列を追記した。",
+                "",
+            ]
+        return lines
+
+    @classmethod
     def _build_report(
-        cls, task: dict, rules: list[dict], *, allow_web_search: bool = True
+        cls,
+        task: dict,
+        rules: list[dict],
+        comments: list[dict],
+        *,
+        allow_web_search: bool = True,
     ) -> str:
         """確定ユースケース「調査 → Markdown レポート化」の固定レポート（§7.3 運用）。
 
@@ -255,6 +354,7 @@ class MockProvider(AiProvider):
         task の title と、渡された rules のテキストを織り込む。
         allow_web_search=False（#21 ポリシー）では出典URLの代わりに
         「要確認事項」を明記する（決定的に文言が変わる）。
+        履歴に差し戻し・レビュー指摘があれば対応セクションを差し込む（#23）。
         """
         title = task.get("title", "")
         summary_third = (
@@ -271,6 +371,7 @@ class MockProvider(AiProvider):
             summary_third,
             "",
             *cls._rules_section(rules),
+            *cls._revision_sections(comments),
             "## 調査結果",
             "",
             "### 背景と目的",
