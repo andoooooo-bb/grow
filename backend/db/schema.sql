@@ -120,7 +120,7 @@ create table rule_feedback (
 create table ai_jobs (
   id uuid primary key default gen_random_uuid(),
   task_id uuid not null references tasks(id) on delete cascade,
-  kind text not null,               -- 'execute' | 'breakdown' | 'distill'
+  kind text not null,               -- 'execute' | 'breakdown' | 'distill' | 'orchestrate'(#22)
   status text not null default 'queued',
   applied_rule_ids uuid[] not null default '{}',
   error text,

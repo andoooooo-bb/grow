@@ -262,3 +262,54 @@ async def test_usage_grows_with_input_size(provider: MockProvider):
         task, chat=[], rules=[{"id": "K-02", "text": "絵文字は使わない" * 20}]
     )
     assert large.usage.input_tokens > small.usage.input_tokens
+
+
+# --- decide_next_action（#22 指揮者。決定的な状態機械分岐） ---
+
+
+def _conductor_task(
+    status: str, *, has_chat: bool = False, has_artifact: bool = False
+) -> dict:
+    """orchestrate ジョブが集約する現況キー付きのタスク dict（#22）。"""
+    return {
+        **_task(),
+        "status": status,
+        "autonomy": "L1",
+        "hasChat": has_chat,
+        "hasArtifact": has_artifact,
+        "childStatuses": [],
+    }
+
+
+@pytest.mark.parametrize(
+    ("status", "has_chat", "has_artifact", "expected"),
+    [
+        ("breakdown", False, False, "hearing"),  # 前提が未確認 → まず質問
+        ("spec", False, False, "hearing"),
+        ("breakdown", True, False, "breakdown"),  # 壁打ち済み → 分解を提案
+        ("spec", True, False, "breakdown"),
+        ("queued", False, False, "execute"),  # 実行可能 → 実行AIへ
+        ("you_todo", False, True, "execute"),  # 差し戻し後の再実行も execute
+        ("you_review", False, True, "handoff_human"),  # 成果物レビューは人の判断
+        ("reviewing", False, True, "handoff_human"),
+        ("ai_work", False, False, "handoff_human"),  # 判断できない状態は人へ（安全側）
+        ("done", False, True, "done"),  # 完了済み → 終了
+    ],
+)
+async def test_decide_next_action_state_machine(
+    provider: MockProvider, status: str, has_chat: bool, has_artifact: bool, expected: str
+):
+    result = await provider.decide_next_action(
+        _conductor_task(status, has_chat=has_chat, has_artifact=has_artifact), [], []
+    )
+    assert result.action == expected
+    assert result.reason  # 判断理由は必ず付く（（理由: …）コメントの材料）
+    _assert_positive_usage(result.usage)
+
+
+async def test_decide_next_action_is_deterministic(provider: MockProvider):
+    task = _conductor_task("queued")
+    history = [{"who": "human", "text": "出典URLもお願いします"}]
+    assert await provider.decide_next_action(
+        task, history, []
+    ) == await provider.decide_next_action(task, history, [])

@@ -15,6 +15,8 @@ from app.ai.provider import (
     AiProvider,
     ChatReplyResult,
     ExecuteResult,
+    NextAction,
+    NextActionResult,
     ProposeRulesResult,
     ProposeSubtasksResult,
     RuleProposal,
@@ -92,6 +94,17 @@ RULES_T091 = [
     ),
 ]
 
+# --- 指揮者の判断理由（#22。デモで確実に再現できる決定的な文言） ---
+
+DECIDE_REASONS: dict[str, str] = {
+    "hearing": "前提が未確認のため、まずヒアリングで要件を確認します",
+    "breakdown": "壁打ちで前提が揃ったため、サブタスクへの分解を提案します",
+    "execute": "実行可能な状態のため、実行AIに作業を任せます",
+    "handoff_review": "成果物のレビューと承認は人の判断が必要です",
+    "handoff_unknown": "AIだけでは進められない状態のため、人にお返しします",
+    "done": "成果物まで完了済みのため、これ以上の作業はありません",
+}
+
 
 class MockProvider(AiProvider):
     """プロトの固定応答をそのまま返す決定的プロバイダ（費用ゼロ・ネットワーク不要）。"""
@@ -159,6 +172,39 @@ class MockProvider(AiProvider):
         else:
             text = CHAT_FOLLOWUP
         return ChatReplyResult(text=text, usage=self._usage(text, task, chat, rules))
+
+    async def decide_next_action(
+        self, task: dict, history: list[dict], rules: list[dict]
+    ) -> NextActionResult:
+        """指揮者の次アクション（#22）: タスク現況からの決定的な状態機械分岐。
+
+        LLM を使わず、orchestrate ジョブが集約した現況キー
+        （status / hasChat / hasArtifact）だけで判断する（同じ入力には常に同じ出力）。
+        """
+        status = task.get("status")
+        has_chat = bool(task.get("hasChat"))
+        has_artifact = bool(task.get("hasArtifact"))
+
+        action: NextAction
+        if status == "done":
+            action, reason_key = "done", "done"
+        elif status in ("breakdown", "spec") and not has_chat:
+            action, reason_key = "hearing", "hearing"
+        elif status in ("breakdown", "spec"):
+            # 壁打ち済みで分解候補が未反映（反映済みなら親は ai_work になっている）
+            action, reason_key = "breakdown", "breakdown"
+        elif status in ("queued", "you_todo"):
+            action, reason_key = "execute", "execute"
+        elif status in ("you_review", "reviewing") and has_artifact:
+            action, reason_key = "handoff_human", "handoff_review"
+        else:
+            action, reason_key = "handoff_human", "handoff_unknown"
+        reason = DECIDE_REASONS[reason_key]
+        return NextActionResult(
+            action=action,
+            reason=reason,
+            usage=self._usage(f"{action}:{reason}", task, history, rules),
+        )
 
     # --- 内部ヘルパ ---
 

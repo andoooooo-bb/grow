@@ -545,3 +545,74 @@ async def test_chat_reply_raises_on_textless_response(patch_client):
     patch_client(_function_call_response("propose_subtasks", {"subtasks": []}))
     with pytest.raises(GeminiResponseError):
         await GeminiProvider().chat_reply(_task(), [], [])
+
+
+# ---- (e) decide_next_action（#22 指揮者） -------------------------------------------
+
+
+def _conductor_task() -> dict:
+    """orchestrate ジョブが集約する現況キー付きのタスク dict（#22）。"""
+    return {
+        **_task(),
+        "status": "queued",
+        "autonomy": "L1",
+        "hasChat": False,
+        "hasArtifact": False,
+        "childStatuses": [],
+    }
+
+
+async def test_decide_next_action_declares_enum_and_forces_function_calling(patch_client):
+    fake = patch_client(
+        _function_call_response(
+            "decide_next_action", {"action": "execute", "reason": "実行可能な状態のため"}
+        )
+    )
+    history = [{"who": "human", "text": "料金は税抜で統一してください"}]
+    result = await GeminiProvider().decide_next_action(_conductor_task(), history, _RULES)
+
+    call = fake.models.calls[0]
+    assert call["model"] == "gemini-2.5-flash"  # 判断は毎ループ走るので Flash 系（§00 #6）
+
+    system = call["config"].system_instruction
+    assert "指揮者エージェント" in system
+    assert "ステータス: queued" in system  # 現況の注入
+    assert "オートノミー: L1" in system
+    assert "human: 料金は税抜で統一してください" in system  # コメント履歴の注入
+    assert "# 適用ルール（優先度: 高→低）" in system
+
+    decl = call["config"].tools[0].function_declarations[0]
+    assert decl.name == "decide_next_action"
+    assert decl.parameters.required == ["action", "reason"]
+    assert decl.parameters.properties["action"].enum == [
+        "hearing",
+        "breakdown",
+        "execute",
+        "handoff_human",
+        "done",
+    ]
+
+    fc = call["config"].tool_config.function_calling_config
+    assert fc.mode == types.FunctionCallingConfigMode.ANY  # function calling を強制
+    assert fc.allowed_function_names == ["decide_next_action"]
+
+    assert result.action == "execute"
+    assert result.reason == "実行可能な状態のため"
+    assert result.usage.input_tokens == 80
+    assert result.usage.output_tokens == 21
+
+
+async def test_decide_next_action_raises_on_invalid_action(patch_client):
+    patch_client(
+        _function_call_response(
+            "decide_next_action", {"action": "retry", "reason": "もう一度やる"}
+        )
+    )
+    with pytest.raises(GeminiResponseError):
+        await GeminiProvider().decide_next_action(_conductor_task(), [], [])
+
+
+async def test_decide_next_action_raises_without_function_call(patch_client):
+    patch_client(_text_response("次は execute が良いと思います"))
+    with pytest.raises(GeminiResponseError):
+        await GeminiProvider().decide_next_action(_conductor_task(), [], [])

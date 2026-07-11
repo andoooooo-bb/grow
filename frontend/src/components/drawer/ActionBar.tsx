@@ -13,6 +13,11 @@ interface ActionBarProps {
    * および assign-ai 送信中は true（Grow.dc.html の活性制御に合わせる）
    */
   assignAiDisabled?: boolean;
+  /** #22 結線済み: autopilot（指揮者AI）。assign-ai と同条件＋L0 で無効 */
+  onAutopilot?: () => void;
+  autopilotDisabled?: boolean;
+  /** 無効理由のツールチップ（例: L0 のとき「L0では提案のみです」） */
+  autopilotTitle?: string;
   /** #12 が結線: startChat（§5.3） */
   onStartChat?: () => void;
   /** #8 結線済み: markDone（§5.3）。未指定（done カード）はボタンを出さない（§03） */
@@ -24,6 +29,9 @@ const noop = () => {};
 export function ActionBar({
   onAssignAi = noop,
   assignAiDisabled = false,
+  onAutopilot = noop,
+  autopilotDisabled = false,
+  autopilotTitle,
   onStartChat = noop,
   onMarkDone,
 }: ActionBarProps) {
@@ -37,6 +45,16 @@ export function ActionBar({
       >
         <span className="action-bar__assign-dot" aria-hidden="true" />
         AIにまかせる
+      </button>
+      <button
+        type="button"
+        className="action-bar__button action-bar__button--autopilot"
+        disabled={autopilotDisabled}
+        onClick={onAutopilot}
+        title={autopilotTitle}
+      >
+        <span className="action-bar__autopilot-dot" aria-hidden="true" />
+        オートパイロット
       </button>
       <button
         type="button"

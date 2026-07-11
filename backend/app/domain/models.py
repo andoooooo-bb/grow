@@ -65,6 +65,7 @@ class AiJobKind(StrEnum):
     EXECUTE = "execute"
     BREAKDOWN = "breakdown"
     DISTILL = "distill"
+    ORCHESTRATE = "orchestrate"  # 指揮者エージェント（#22 オートパイロット）
 
 
 class AgentRole(StrEnum):

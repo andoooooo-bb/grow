@@ -5,6 +5,7 @@
 
 import { useEffect } from 'react';
 import { useBoardStore } from '../../store/board.ts';
+import { taskAutonomy } from '../../types/domain.ts';
 import { ActionBar } from './ActionBar';
 import { ActivityThread } from './ActivityThread';
 import { AgentTimeline } from './AgentTimeline';
@@ -27,6 +28,7 @@ export function Drawer() {
   const loadArtifacts = useBoardStore((s) => s.loadArtifacts);
   const markDone = useBoardStore((s) => s.markDone);
   const assignAi = useBoardStore((s) => s.assignAi);
+  const autopilot = useBoardStore((s) => s.autopilot);
   const startChat = useBoardStore((s) => s.startChat);
   const assigning = useBoardStore((s) =>
     s.selectedId !== null ? (s.assigning[s.selectedId] ?? false) : false,
@@ -47,6 +49,9 @@ export function Drawer() {
   // それ以外の不正遷移はサーバが 409 で拒否し boardError に出る（§5.4）
   const canAssignAi =
     task.status !== 'ai_work' && task.status !== 'done' && !assigning;
+  // 「オートパイロット」（#22 指揮者AI）: assign-ai と同条件 ＋ L0（計画のみ #21）は無効
+  const isPlanOnly = taskAutonomy(task) === 'L0';
+  const canAutopilot = canAssignAi && !isPlanOnly;
 
   return (
     <aside className="drawer">
@@ -60,6 +65,9 @@ export function Drawer() {
           <ActionBar
             onAssignAi={() => void assignAi(task.id)}
             assignAiDisabled={!canAssignAi}
+            onAutopilot={() => void autopilot(task.id)}
+            autopilotDisabled={!canAutopilot}
+            autopilotTitle={isPlanOnly ? 'L0では提案のみです' : undefined}
             onStartChat={() => void startChat(task.id)}
             onMarkDone={
               task.status !== 'done' ? () => void markDone(task.id) : undefined

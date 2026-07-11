@@ -37,6 +37,7 @@ import asyncpg
 from app.db import get_pool
 from app.domain.models import AiJobKind, AiJobStatus
 from app.jobs.execute import JobNotFoundError, run_execute_job_row
+from app.jobs.orchestrate import run_orchestrate_job_row
 from app.repo import ai_jobs as ai_jobs_repo
 
 logger = logging.getLogger(__name__)
@@ -112,3 +113,4 @@ async def dispatch_job(
 
 # ---- 登録ブロック（後続 Wave は新 kind をここに1行追加） -----------------------------
 register(AiJobKind.EXECUTE, run_execute_job_row)
+register(AiJobKind.ORCHESTRATE, run_orchestrate_job_row)

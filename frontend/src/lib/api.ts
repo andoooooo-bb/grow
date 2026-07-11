@@ -84,6 +84,16 @@ export function assignAi(taskId: string): Promise<AssignAiResponse> {
   });
 }
 
+/**
+ * オートパイロット（#22 指揮者AI）を起動する。202 {jobId}。
+ * ai_work/done・オートノミーL0・コスト上限は 409。以降の進行はすべて SSE が届ける。
+ */
+export function autopilot(taskId: string): Promise<AssignAiResponse> {
+  return request<AssignAiResponse>(`/api/tasks/${taskId}/autopilot`, {
+    method: 'POST',
+  });
+}
+
 /** 壁打ちメッセージ一覧を作成時刻の昇順で取得する（#12）。 */
 export function getChatMessages(taskId: string): Promise<ChatMessage[]> {
   return request<ChatMessage[]>(`/api/tasks/${taskId}/chat`);

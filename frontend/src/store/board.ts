@@ -6,6 +6,7 @@ import { create } from 'zustand';
 import {
   adoptLearn as adoptLearnRequest,
   assignAi as assignAiRequest,
+  autopilot as autopilotRequest,
   confirmBreakdown as confirmBreakdownRequest,
   createArtifact,
   createComment,
@@ -144,6 +145,14 @@ export interface BoardActions {
    * コスト上限到達（#21）も 409 — 停止理由コメント・you_todo 戻しは SSE が届ける。
    */
   assignAi: (taskId: string) => Promise<void>;
+
+  // ---- オートパイロット（#22 指揮者AI） ----
+  /**
+   * POST /tasks/:id/autopilot（assignAi と同型）。202 後の進行（判断理由コメント・
+   * ジョブ連鎖・遷移）はすべて SSE に任せる。送信中は assigning フラグを共用して
+   * 「AIにまかせる」とまとめて無効化。409（L0/コスト上限等）/失敗は boardError。
+   */
+  autopilot: (taskId: string) => Promise<void>;
 
   // ---- タスク別オートノミー（#21） ----
   /** L0-L3 ダイヤル: 楽観的更新 → PATCH {autonomy}。失敗はロールバック＋boardError */
@@ -529,6 +538,26 @@ export const useBoardStore = create<BoardStore>()((set, get) => ({
     } catch {
       // 不正遷移（409）や通信失敗（§5.4 / §00 #10）
       set({ boardError: 'AIにまかせられませんでした' });
+    } finally {
+      set((st) => ({ assigning: { ...st.assigning, [taskId]: false } }));
+    }
+  },
+
+  // ---- オートパイロット（#22 指揮者AI） ----
+  autopilot: async (taskId) => {
+    const s = get();
+    if (s.assigning[taskId] === true) return; // 二重送信防止（assignAi とフラグ共用）
+    if (s.cards[taskId] === undefined) return;
+    set((st) => ({
+      assigning: { ...st.assigning, [taskId]: true },
+      boardError: null,
+    }));
+    try {
+      // 202 {jobId}。以降の判断理由コメント・ジョブ連鎖・遷移はすべて SSE が反映する
+      await autopilotRequest(taskId);
+    } catch {
+      // 409（ai_work/done・L0・コスト上限）や通信失敗（§5.4）
+      set({ boardError: 'オートパイロットを開始できませんでした' });
     } finally {
       set((st) => ({ assigning: { ...st.assigning, [taskId]: false } }));
     }

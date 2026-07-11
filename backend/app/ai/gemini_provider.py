@@ -27,6 +27,8 @@ from app.ai.provider import (
     AiProvider,
     ChatReplyResult,
     ExecuteResult,
+    NextAction,
+    NextActionResult,
     ProposeRulesResult,
     ProposeSubtasksResult,
     RuleProposal,
@@ -71,6 +73,38 @@ PROPOSE_SUBTASKS_DECLARATION = types.FunctionDeclaration(
             )
         },
         required=["subtasks"],
+    ),
+)
+
+DECIDE_NEXT_ACTION_TOOL_NAME = "decide_next_action"
+NEXT_ACTIONS: tuple[NextAction, ...] = (
+    "hearing",
+    "breakdown",
+    "execute",
+    "handoff_human",
+    "done",
+)
+DECIDE_NEXT_ACTION_DECLARATION = types.FunctionDeclaration(
+    name=DECIDE_NEXT_ACTION_TOOL_NAME,
+    description="タスクの現況から、指揮者エージェントとして次に取るべきアクションを1つ決定する",
+    parameters=types.Schema(
+        type=types.Type.OBJECT,
+        properties={
+            "action": types.Schema(
+                type=types.Type.STRING,
+                enum=list(NEXT_ACTIONS),
+                description=(
+                    "hearing=前提の確認質問 / breakdown=サブタスク分解の提案 / "
+                    "execute=実行AIへ作業を依頼 / handoff_human=人へバトンを渡す / "
+                    "done=これ以上の作業はない"
+                ),
+            ),
+            "reason": types.Schema(
+                type=types.Type.STRING,
+                description="この判断の理由（日本語で1〜2文・簡潔に）",
+            ),
+        },
+        required=["action", "reason"],
     ),
 )
 
@@ -265,6 +299,44 @@ def _propose_rules_system(task: dict, comments: list[dict], chat: list[dict]) ->
     )
 
 
+def _decide_next_action_system(task: dict, history: list[dict], rules: list[dict]) -> str:
+    """#22 指揮者の判断 system プロンプト（現況キーは orchestrate ジョブが集約）。"""
+    child_statuses = task.get("childStatuses") or []
+    parts = [
+        "あなたは Grow の指揮者エージェントです。タスクの現況を読み、",
+        "計画AI（ヒアリング・分解）・実行AI・人のどこへバトンを渡すべきか、",
+        "次のアクションを1つだけ決定します。",
+        "",
+        "# 判断の原則",
+        "- 前提が不明なうちは hearing で人に確認する（勝手に進めない）。",
+        "- 壁打ちで前提が揃った大きいタスクは breakdown で分解を提案する"
+        "（ボードへの反映は人が承認する）。",
+        "- 実行可能な状態なら execute で実行AIに任せる。",
+        "- 成果物のレビュー・意思決定など人にしかできない局面は handoff_human。",
+        "- これ以上の作業がなければ done。",
+        "",
+        "# タスク現況",
+        f"タイトル: {task.get('title', '')}",
+        f"ラベル: {_labels(task)}",
+        f"ステータス: {task.get('status', '')}",
+        f"オートノミー: {task.get('autonomy', '')}",
+        f"壁打ち履歴: {'あり' if task.get('hasChat') else 'なし'}",
+        f"成果物: {'あり' if task.get('hasArtifact') else 'なし'}",
+        f"子タスクのステータス: {', '.join(child_statuses) if child_statuses else 'なし'}",
+        "",
+        "# これまでのやり取り（時系列）",
+        _transcript(history),
+    ]
+    rules_section = _rules_section(rules)
+    if rules_section:
+        parts += ["", rules_section]
+    parts += [
+        "",
+        f"必ず {DECIDE_NEXT_ACTION_TOOL_NAME} ツールを呼び出して結果を返してください。",
+    ]
+    return "\n".join(parts)
+
+
 def _chat_contents(chat: list[dict], *, empty_prompt: str) -> list[types.Content]:
     """会話履歴を contents に写像する（human→user / ai→model）。空なら開始メッセージ。"""
     contents = [
@@ -397,6 +469,17 @@ def _parse_rules(args: dict) -> list[RuleProposal]:
             )
         )
     return proposals
+
+
+def _parse_next_action(args: dict) -> tuple[NextAction, str]:
+    """decide_next_action の引数を (action, reason) に変換する（自由文パース禁止）。"""
+    action = args.get("action")
+    reason = args.get("reason")
+    if action not in NEXT_ACTIONS:
+        raise GeminiResponseError(f"decide_next_action の action が不正です: {action!r}")
+    if not isinstance(reason, str) or not reason:
+        raise GeminiResponseError("decide_next_action の reason が不正です")
+    return action, reason
 
 
 # ---- プロバイダ本体 ----------------------------------------------------------------
@@ -533,6 +616,29 @@ class GeminiProvider(AiProvider):
         return ChatReplyResult(
             text=_require_text(response, "chat_reply"), usage=_usage_from(response)
         )
+
+    async def decide_next_action(
+        self, task: dict, history: list[dict], rules: list[dict]
+    ) -> NextActionResult:
+        """指揮者の次アクション判断（#22）: Function Calling を強制して1手を選ばせる。
+
+        判断は軽量で頻繁（毎ループ）なので Flash 系（GEMINI_MODEL_LIGHT）を使う。
+        """
+        settings = get_settings()
+        response = await self._generate(
+            model=settings.gemini_model_light,
+            contents=_user_content(
+                f"上記のタスク現況から、{DECIDE_NEXT_ACTION_TOOL_NAME} ツールで"
+                "次のアクションを1つ決定してください。"
+            ),
+            config=self._forced_function_config(
+                system=_decide_next_action_system(task, history, rules),
+                declaration=DECIDE_NEXT_ACTION_DECLARATION,
+            ),
+        )
+        args = _function_call_args(response, DECIDE_NEXT_ACTION_TOOL_NAME)
+        action, reason = _parse_next_action(args)
+        return NextActionResult(action=action, reason=reason, usage=_usage_from(response))
 
     # ---- 内部ヘルパ ----------------------------------------------------------------
 

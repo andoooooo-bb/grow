@@ -74,6 +74,26 @@ class ChatReplyResult:
     usage: TokenUsage
 
 
+# 指揮者エージェント（#22）が選べる次アクションの候補
+NextAction = Literal["hearing", "breakdown", "execute", "handoff_human", "done"]
+
+
+@dataclass(frozen=True, slots=True)
+class NextActionResult:
+    """指揮者エージェント（#22 orchestrate）の次アクション判断。
+
+    - hearing: 前提が不明。壁打ちの初期質問で人に確認する
+    - breakdown: 前提が揃った。サブタスク分解を提案する（反映は人の承認 §1.6）
+    - execute: 実行可能。実行AI（execute ジョブ）に作業を任せる
+    - handoff_human: AIだけでは進められない。人へバトンを渡す
+    - done: これ以上の作業はない（完了扱いは呼び出し側がオートノミーで分岐）
+    """
+
+    action: NextAction
+    reason: str
+    usage: TokenUsage
+
+
 class AiProvider(ABC):
     """ランタイム AI の抽象インターフェイス（AI_PROVIDER=mock|gemini で実装を切替）。"""
 
@@ -114,3 +134,15 @@ class AiProvider(ABC):
         self, task: dict, chat: list[dict], rules: list[dict]
     ) -> ChatReplyResult:
         """壁打ち応答（§7.4a）: 初回は前提確認の質問、以降は分解へ誘導する応答。"""
+
+    @abstractmethod
+    async def decide_next_action(
+        self, task: dict, history: list[dict], rules: list[dict]
+    ) -> NextActionResult:
+        """指揮者の次の一手（#22）: タスク現況から次アクションを1つ選ぶ。
+
+        task には基本キー（id/humanId/title/labels）に加え、判断材料として
+        status / autonomy / hasChat / hasArtifact / childStatuses を含める
+        （orchestrate ジョブが現況を集約して渡す）。history はコメント履歴
+        （who/text）、rules は retrieval 済みルール。
+        """

@@ -40,6 +40,20 @@
   background: var(--color-assign-dot);
 }
 
+/* 「オートパイロット」= 指揮者トーン（ダーク #22。agent-badge--conductor と同系） */
+.action-bar__button--autopilot {
+  color: #fff;
+  background: var(--color-btn-dark-bg);
+  border: none;
+}
+
+.action-bar__autopilot-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #8b93a7; /* ダーク地に映えるスレートグレー */
+}
+
 /* 「AIと壁打ち / 分解」= セカンダリ（パープル） */
 .action-bar__button--chat {
   color: var(--color-purple);

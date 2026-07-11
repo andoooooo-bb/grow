@@ -22,10 +22,12 @@ interface FetchStubOptions {
   post?: (body: { author: string; text: string }) => unknown;
   /** POST /api/tasks/:id/assign-ai の応答（省略時は 202 {jobId}） */
   assignAi?: () => unknown;
+  /** POST /api/tasks/:id/autopilot の応答（省略時は 202 {jobId}。#22 指揮者AI） */
+  autopilot?: () => unknown;
 }
 
 /** ドロワーが叩く API（コメント・成果物・assign-ai）を受ける fetch スタブを差し込む */
-function installFetch({ comments = [], post, assignAi }: FetchStubOptions = {}) {
+function installFetch({ comments = [], post, assignAi, autopilot }: FetchStubOptions = {}) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? 'GET';
@@ -50,6 +52,10 @@ function installFetch({ comments = [], post, assignAi }: FetchStubOptions = {}) 
     if (method === 'POST' && url.endsWith('/assign-ai')) {
       if (assignAi) return assignAi();
       return jsonResponse(202, { jobId: 'job-1' });
+    }
+    if (method === 'POST' && url.endsWith('/autopilot')) {
+      if (autopilot) return autopilot();
+      return jsonResponse(202, { jobId: 'job-2' });
     }
     throw new Error(`unexpected fetch: ${method} ${url}`);
   });
@@ -373,6 +379,67 @@ describe('assignAi 結線と活性制御（#10: §5.3 / Grow.dc.html）', () => 
 
     await waitFor(() =>
       expect(useBoardStore.getState().boardError).toBe('AIにまかせられませんでした'),
+    );
+  });
+});
+
+describe('autopilot 結線と活性制御（#22: 指揮者AI）', () => {
+  it('「オートパイロット」で POST /api/tasks/:id/autopilot を呼ぶ', async () => {
+    const fetchMock = installFetch();
+    useBoardStore.getState().select('T-104'); // spec（assign-ai と同条件で活性）
+    render(<Drawer />);
+    await waitForLoaded('T-104');
+
+    fireEvent.click(screen.getByRole('button', { name: 'オートパイロット' }));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/tasks/T-104/autopilot',
+        expect.objectContaining({ method: 'POST' }),
+      ),
+    );
+    // 202 後はローカルで状態を変えない（判断・遷移はすべて SSE 反映待ち）
+    expect(useBoardStore.getState().cards['T-104'].status).toBe('spec');
+  });
+
+  it('ai_work のカードでは「オートパイロット」が無効', async () => {
+    installFetch();
+    useBoardStore.getState().select('T-098'); // ai_work
+    render(<Drawer />);
+
+    expect(screen.getByRole('button', { name: 'オートパイロット' })).toBeDisabled();
+    await waitForLoaded('T-098');
+  });
+
+  it('L0（計画のみ #21）では無効＋ツールチップ「L0では提案のみです」', async () => {
+    installFetch();
+    const s = useBoardStore.getState();
+    s.select('T-104');
+    useBoardStore.setState({
+      cards: { ...s.cards, 'T-104': { ...s.cards['T-104'], autonomy: 'L0' } },
+    });
+    render(<Drawer />);
+
+    const button = screen.getByRole('button', { name: 'オートパイロット' });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute('title', 'L0では提案のみです');
+    // 「AIにまかせる」（L0 の提案フロー）は引き続き使える
+    expect(screen.getByRole('button', { name: 'AIにまかせる' })).toBeEnabled();
+    await waitForLoaded('T-104');
+  });
+
+  it('autopilot の 409 で boardError を設定する', async () => {
+    installFetch({ autopilot: () => jsonResponse(409, {}) });
+    useBoardStore.getState().select('T-104');
+    render(<Drawer />);
+    await waitForLoaded('T-104');
+
+    fireEvent.click(screen.getByRole('button', { name: 'オートパイロット' }));
+
+    await waitFor(() =>
+      expect(useBoardStore.getState().boardError).toBe(
+        'オートパイロットを開始できませんでした',
+      ),
     );
   });
 });
