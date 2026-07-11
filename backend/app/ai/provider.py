@@ -220,3 +220,66 @@ class AiProvider(ABC):
         含める（orchestrate ジョブが現況を集約して渡す）。history はコメント履歴
         （who/text）、rules は retrieval 済みルール。
         """
+
+    @abstractmethod
+    async def reconcile_rules(
+        self,
+        existing_rules: list[dict],
+        recent_tasks: list[dict],
+        feedback: list[dict],
+        signals: list[dict],
+    ) -> "ReconcileResult":
+        """夜間ナレッジCI（#26 §6.4b/c・§6.6 / §7.5 reconcile_rules）。
+
+        既存ルール全件・直近の完了タスク群・人の採用/却下ログ（rule_feedback）・
+        暗黙評価（rule_signals）をまとめて読み、ナレッジのメンテナンス提案
+        （新規蒸留 distill / 重複統合 merge / 矛盾検出 conflict / 棚卸し demote）を返す。
+
+        - existing_rules: {"id"(K-xx), "text", "scope", "tags", "confidence", "source",
+          "applied", "lastAppliedAt", "createdAt"} のリスト（archived 除外済み）
+        - recent_tasks: {"humanId", "title", "labels", "status", "distilled"(bool)} のリスト
+        - feedback: {"action"("adopt"|"dismiss"), "text", "scope", "tags", "confidence"}
+          — 人の判断のお手本（few-shot 材料 §6.4a）
+        - signals: {"ruleId"(K-xx), "signal"("positive"|"negative")} — 承認/差し戻しの暗黙評価
+        提案の適用（採用/却下）は人が受信箱で判断する。ここでは提案のみを返す。
+        """
+
+
+# ---- 夜間ナレッジCI（#26）の構造化出力 ---------------------------------------------
+# 並行開発（#27 が同ファイル上部に追記する）とのコンフリクトを避けるため、
+# 本ブロックはファイル末尾に置く。AiProvider.reconcile_rules の annotation は
+# 文字列参照（"ReconcileResult"）で解決される。
+
+# 提案の種別: 新規蒸留 / 重複統合 / 矛盾検出 / 不使用ルールの棚卸し（§6.4b/c・§6.6）
+CiProposalKind = Literal["distill", "merge", "conflict", "demote"]
+
+
+@dataclass(frozen=True, slots=True)
+class CiProposal:
+    """ナレッジCIの提案1件（rule_proposals 受信箱の1行になる）。
+
+    - distill: text/scope/tags/confidence/source が新規ルール案。source_task_id は由来タスク
+    - merge: target_rule_ids（2件以上）を統合した新ルール案を text に持つ
+    - conflict: target_rule_ids（矛盾する既存ルール群）の置き換え文案を text に持つ
+    - demote: target_rule_ids をアーカイブ提案（text は空でよい）
+    note は AI の判断説明（受信箱カードに表示。全 kind 共通で必須）。
+    target_rule_ids / source_task_id は human_id（K-xx / T-xx）で表す（§00 #9）。
+    """
+
+    kind: CiProposalKind
+    text: str
+    scope: Literal["personal", "team"]
+    tags: list[str]
+    confidence: Literal["high", "med", "low"]
+    source: str
+    target_rule_ids: list[str]
+    note: str
+    source_task_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ReconcileResult:
+    """reconcile_rules（#26）の構造化出力。"""
+
+    proposals: list[CiProposal]
+    usage: TokenUsage

@@ -236,6 +236,8 @@ class Rule(CamelModel):
     confidence: Confidence
     applied: int  # 適用回数（retrievalで採用されるたび++）
     last_applied_at: str | None = None
+    # 棚卸しアーカイブ（#26 §6.6）。true は retrieval・ナレッジ一覧から除外される
+    archived: bool = False
     is_new: bool | None = None  # 採用直後の NEW バッジ表示用（クライアント表示状態）
     created_at: str
     updated_at: str

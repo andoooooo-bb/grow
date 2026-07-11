@@ -107,4 +107,16 @@ describe('relevantRules（§6.3 / §00 #8 — BE ミラー）', () => {
     relevantRules(rules, fixture.cards['T-104']);
     expect(rules.map((r) => r.id)).toEqual(before);
   });
+
+  it('アーカイブ済み（#26 棚卸し）は BE relevant_rules と同じく除外される', () => {
+    const rules = fixture.rules.map((r) =>
+      r.id === 'K-02' ? { ...r, archived: true } : r,
+    );
+    const rows = relevantRules(rules, fixture.cards['T-104']);
+    expect(rows.map((r) => r.id)).toEqual(['K-04', 'K-01', 'K-03']);
+    // archived 未定義（旧フィクスチャ互換）は従来通り対象
+    expect(relevantRules(fixture.rules, fixture.cards['T-104']).map((r) => r.id)).toEqual(
+      ['K-02', 'K-04', 'K-01', 'K-03'],
+    );
+  });
 });

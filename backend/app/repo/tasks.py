@@ -293,7 +293,26 @@ async def apply_patch(
         f"update tasks set {', '.join(set_parts)} where id = ${len(values)} returning *",
         *values,
     )
+    if new_row["status"] != row["status"]:
+        await _on_status_transition(conn, row, new_row)
     return await task_from_row(conn, new_row)
+
+
+async def _on_status_transition(
+    conn: asyncpg.Connection, old_row: asyncpg.Record, new_row: asyncpg.Record
+) -> None:
+    """ステータス遷移フック（apply_patch = 全遷移が通る単一点。遷移時のみ呼ばれる）。
+
+    - #26: レビュー承認/差し戻し/再オープンを適用済みルールへの暗黙評価として
+      rule_signals へ自動記録する（§6.6 確度ライフサイクルの材料）
+    - #28: 信頼グラデュエーションの task_transitions 記録もここに同居させる予定
+    トランザクション内で呼ばれる（apply_patch と同一コミット）。
+    """
+    from app.repo import rules as rules_repo  # 循環 import 回避（rules は tasks を参照しない）
+
+    await rules_repo.record_transition_signals(
+        conn, new_row, old_status=old_row["status"], new_status=new_row["status"]
+    )
 
 
 async def _resolve_parent(

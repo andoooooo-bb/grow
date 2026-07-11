@@ -189,6 +189,9 @@ export interface Rule {
   confidence: Confidence; // high | med | low
   applied: number; // 適用回数（retrievalで採用されるたび++）
   lastAppliedAt?: string | null;
+  // 棚卸しアーカイブ（#26 §6.6）。true は retrieval・ナレッジ一覧から除外される。
+  // BE は常に返すが旧フィクスチャ互換のため optional（省略時 false 扱い）
+  archived?: boolean;
   isNew?: boolean; // 採用直後の NEW バッジ表示用（クライアント表示状態）
   createdAt: string;
   updatedAt: string;

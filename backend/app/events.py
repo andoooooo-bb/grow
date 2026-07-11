@@ -25,6 +25,11 @@ ARTIFACT_CREATED = "artifact.created"  # payload: Artifact DTO（#9 成果物）
 ARTIFACT_DELTA = "artifact.delta"
 RULE_CREATED = "rule.created"  # payload: Rule DTO（#13 蒸留候補の採用）
 RULE_UPDATED = "rule.updated"  # payload: Rule DTO（#13 昇格・applied++ の同期）
+# #26 夜間ナレッジCI: 受信箱への提案追加（payload: RuleProposalCreatedEvent DTO —
+# count と各 proposal DTO。FE の受信箱バッジ/一覧がライブ更新される）
+RULE_PROPOSAL_CREATED = "rule_proposal.created"
+# #26 夜間ナレッジCI: 実行完了（payload: KnowledgeCiCompletedEvent DTO — 実行サマリー）
+KNOWLEDGE_CI_COMPLETED = "knowledge.ci.completed"
 
 Event = dict[str, Any]
 

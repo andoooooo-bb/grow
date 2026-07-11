@@ -227,3 +227,62 @@ export interface LearnDecisionRequest {
   tags: string[];
   confidence: Confidence;
 }
+
+// ---- 夜間ナレッジCI（#26 §6.4b/c・§6.6） ----
+// 提案の種別: 新規蒸留 / 重複統合 / 矛盾の置き換え / 棚卸しアーカイブ
+export type KnowledgeProposalKind = 'distill' | 'merge' | 'conflict' | 'demote';
+
+// rule_proposals の1行（受信箱カード）。backend KnowledgeProposalDto と鏡写し。
+// targetRuleIds は対象既存ルールの human_id（例 ["K-04","K-06"]）— 現文は
+// store の rules から引いて提案文と対比表示する。note は AI の判断説明。
+export interface KnowledgeProposal {
+  id: string; // UUID（提案は一過性なので human_id は無い）
+  workspaceId: string;
+  kind: KnowledgeProposalKind;
+  text: string; // 新規/統合/置き換えルールの文案（demote は空）
+  scope: RuleScope;
+  tags: string[];
+  confidence: Confidence;
+  source: string;
+  targetRuleIds: string[];
+  note: string;
+  sourceTaskId?: string | null; // distill の由来タスク（T-xx）
+  status: string; // 'pending' | 'adopted' | 'dismissed'
+  createdAt: string;
+  decidedAt?: string | null;
+}
+
+// GET /api/knowledge/proposals（pending の受信箱一覧。新しい順）
+export interface KnowledgeProposalsResponse {
+  proposals: KnowledgeProposal[];
+}
+
+// POST /api/knowledge/ci/run・/internal/knowledge/ci の応答（実行結果サマリー）
+export interface KnowledgeCiRunResponse {
+  runId: string;
+  proposalsCreated: number;
+}
+
+// POST /api/knowledge/proposals/:id/adopt の応答
+// （rule: 新規作成されたルール / archivedRuleIds: アーカイブした既存ルールの K-xx）
+export interface KnowledgeAdoptResponse {
+  proposal: KnowledgeProposal;
+  rule?: Rule | null;
+  archivedRuleIds: string[];
+}
+
+// rule_proposal.created イベントの payload（#26。受信箱のライブ更新）
+export interface RuleProposalCreatedEvent {
+  count: number;
+  proposals: KnowledgeProposal[];
+}
+
+// knowledge.ci.completed イベントの payload（#26。実行サマリー）
+export interface KnowledgeCiCompletedEvent {
+  runId: string;
+  trigger: string; // 'scheduled' | 'manual'
+  proposalsCreated: number;
+  rulesScanned: number;
+  tasksScanned: number;
+  costUsd: number;
+}

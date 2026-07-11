@@ -29,11 +29,13 @@ from google.genai import types
 from app.ai.provider import (
     AiProvider,
     ChatReplyResult,
+    CiProposal,
     ExecuteResult,
     NextAction,
     NextActionResult,
     ProposeRulesResult,
     ProposeSubtasksResult,
+    ReconcileResult,
     ReviewResult,
     RuleConflictResult,
     RuleProposal,
@@ -917,3 +919,255 @@ class GeminiProvider(AiProvider):
                 )
             ),
         )
+
+    # ---- 夜間ナレッジCI（#26。クラス末尾追記 — #27 との並行開発のため） --------------
+
+    async def reconcile_rules(
+        self,
+        existing_rules: list[dict],
+        recent_tasks: list[dict],
+        feedback: list[dict],
+        signals: list[dict],
+    ) -> ReconcileResult:
+        """ナレッジCI（#26 §6.4b/c / §7.5 reconcile_rules）: 強制 FC で提案群を得る。
+
+        夜間バッチ1回きりの軽量判定なので Flash 系（GEMINI_MODEL_LIGHT）を使う。
+        target_rule_ids / source_task_id は human_id（K-xx / T-xx）で受けて検証する
+        （渡していない id = 幻覚は落とす。check_rule_conflicts と同方針）。
+        """
+        settings = get_settings()
+        response = await self._generate(
+            model=settings.gemini_model_light,
+            contents=_user_content(
+                f"上記のナレッジ現況を突き合わせ、{RECONCILE_RULES_TOOL_NAME} ツールで"
+                "メンテナンス提案を返してください（提案が無ければ空配列）。"
+            ),
+            config=self._forced_function_config(
+                system=_reconcile_rules_system(
+                    existing_rules, recent_tasks, feedback, signals
+                ),
+                declaration=RECONCILE_RULES_DECLARATION,
+            ),
+        )
+        args = _function_call_args(response, RECONCILE_RULES_TOOL_NAME)
+        valid_rule_ids = {str(r["id"]) for r in existing_rules if r.get("id")}
+        valid_task_ids = {str(t["humanId"]) for t in recent_tasks if t.get("humanId")}
+        return ReconcileResult(
+            proposals=_parse_ci_proposals(args, valid_rule_ids, valid_task_ids),
+            usage=_usage_from(response),
+        )
+
+
+# ---- 夜間ナレッジCI（#26）の FunctionDeclaration・プロンプト・パーサ ------------------
+# #27 が同ファイル上部に追記するため、本ブロックはファイル末尾に置く
+# （GeminiProvider.reconcile_rules からは呼び出し時に名前解決される）。
+
+RECONCILE_RULES_TOOL_NAME = "reconcile_rules"
+RECONCILE_RULES_DECLARATION = types.FunctionDeclaration(
+    name=RECONCILE_RULES_TOOL_NAME,
+    description=(
+        "既存ルール・完了タスク・人の採否ログ・暗黙評価を突き合わせ、"
+        "ナレッジのメンテナンス提案（新規蒸留/重複統合/矛盾検出/棚卸し）を返す"
+    ),
+    parameters=types.Schema(
+        type=types.Type.OBJECT,
+        properties={
+            "proposals": types.Schema(
+                type=types.Type.ARRAY,
+                items=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "kind": types.Schema(
+                            type=types.Type.STRING,
+                            enum=["distill", "merge", "conflict", "demote"],
+                            description=(
+                                "distill=完了タスクからの新規ルール蒸留 / "
+                                "merge=重複ルールの統合 / conflict=矛盾ルールの置き換え / "
+                                "demote=使われないルールのアーカイブ棚卸し"
+                            ),
+                        ),
+                        "text": types.Schema(
+                            type=types.Type.STRING,
+                            description=(
+                                "新規/統合/置き換えルールの文案（命令形・検証可能な粒度）。"
+                                "demote では空でよい"
+                            ),
+                        ),
+                        "scope": types.Schema(
+                            type=types.Type.STRING, enum=["personal", "team"]
+                        ),
+                        "tags": types.Schema(
+                            type=types.Type.ARRAY,
+                            items=types.Schema(type=types.Type.STRING),
+                            description="適用を絞るラベル。全タスク共通なら空配列",
+                        ),
+                        "confidence": types.Schema(
+                            type=types.Type.STRING, enum=["high", "med", "low"]
+                        ),
+                        "source": types.Schema(
+                            type=types.Type.STRING, description="根拠（例: K-04 と K-06 が矛盾）"
+                        ),
+                        "targetRuleIds": types.Schema(
+                            type=types.Type.ARRAY,
+                            items=types.Schema(type=types.Type.STRING),
+                            description=(
+                                "対象の既存ルール id（例 K-04）。merge/conflict は対象全件、"
+                                "demote は対象1件以上。distill は空配列"
+                            ),
+                        ),
+                        "note": types.Schema(
+                            type=types.Type.STRING,
+                            description="この提案の判断理由（日本語で1〜2文。人が受信箱で読む）",
+                        ),
+                        "sourceTaskId": types.Schema(
+                            type=types.Type.STRING,
+                            description="distill の由来タスク id（例 T-080）。他 kind は省略",
+                        ),
+                    },
+                    required=["kind", "note"],
+                ),
+            )
+        },
+        required=["proposals"],
+    ),
+)
+
+
+def _reconcile_rules_system(
+    existing_rules: list[dict],
+    recent_tasks: list[dict],
+    feedback: list[dict],
+    signals: list[dict],
+) -> str:
+    """#26 ナレッジCIの system プロンプト（§6.4b/c・§6.6 の運用原則を注入）。
+
+    rule_feedback（人の採用/却下ログ）は「人の判断のお手本」として few-shot 的に注入する。
+    """
+    rule_lines = [
+        f"- {r.get('id')}: [{r.get('scope')}/{r.get('confidence')}] {r.get('text')}"
+        f"（tags: {', '.join(r.get('tags') or []) or 'なし'} / 適用 {r.get('applied', 0)}回"
+        f" / 最終適用 {r.get('lastAppliedAt') or 'なし'}）"
+        for r in existing_rules
+    ]
+    task_lines = [
+        f"- {t.get('humanId')}: {t.get('title')}"
+        f"（labels: {', '.join(t.get('labels') or []) or 'なし'} / status: {t.get('status')}"
+        f" / 蒸留済み: {'はい' if t.get('distilled') else 'いいえ'}）"
+        for t in recent_tasks
+    ]
+    feedback_lines = [
+        f"- {'採用' if f.get('action') == 'adopt' else '却下'}:「{f.get('text')}」"
+        f"（scope: {f.get('scope')} / confidence: {f.get('confidence')}）"
+        for f in feedback
+    ]
+    signal_lines = [
+        f"- {s.get('ruleId')}: {'承認' if s.get('signal') == 'positive' else '差し戻し'}"
+        for s in signals
+    ]
+    return "\n".join(
+        [
+            "あなたは Grow のナレッジ・メンテナンスエージェントです。夜間バッチとして、",
+            "蓄積されたルール（ナレッジ）全体を突き合わせ、腐らせないための提案を行います。",
+            "",
+            "# 判定の原則（§6.4/§6.6）",
+            "- distill: 完了済みで未蒸留のタスクから、再利用可能で検証可能な一般化ルール"
+            "のみを抽出する（1回限りの内容・固有名詞・機密は除く）。",
+            "- merge: 内容が重複するルールは1件に統合する文案を出す（情報は失わない）。",
+            "- conflict: 意味的に矛盾するルール（例「敬体で」vs「常体で」）を検出し、"
+            "新しい/高確度の方針を優先した置き換え文案を出す。",
+            "- demote: 適用実績がなく最終適用も古いルールはアーカイブを提案する。",
+            "- 確信が持てないものは提案しない（人の受信箱を無駄に埋めない）。",
+            "- 各提案の note に判断理由を日本語で簡潔に書く（人が朝まとめて読む）。",
+            "",
+            "# 既存ルール",
+            *(rule_lines or ["（なし）"]),
+            "",
+            "# 直近の完了タスク",
+            *(task_lines or ["（なし）"]),
+            "",
+            "# 人の採用/却下ログ（この人の判断のお手本。傾向に合わせること）",
+            *(feedback_lines or ["（なし）"]),
+            "",
+            "# 暗黙評価シグナル（レビュー承認=positive / 差し戻し=negative）",
+            *(signal_lines or ["（なし）"]),
+            "",
+            f"必ず {RECONCILE_RULES_TOOL_NAME} ツールを呼び出して結果を返してください。",
+        ]
+    )
+
+
+# merge / conflict / demote が最低限持つべき対象ルール数（未満の提案は幻覚として捨てる）
+_CI_MIN_TARGETS = {"merge": 2, "conflict": 2, "demote": 1}
+
+
+def _parse_ci_proposals(
+    args: dict, valid_rule_ids: set[str], valid_task_ids: set[str]
+) -> list[CiProposal]:
+    """reconcile_rules の引数を CiProposal に変換する（自由文パース禁止）。
+
+    - 構造の破損（配列でない等）は GeminiResponseError。
+    - 渡していないルール/タスク id（幻覚）は落とし、対象数が閾値未満になった提案は捨てる。
+    """
+    items = args.get("proposals")
+    if not isinstance(items, list):
+        raise GeminiResponseError("reconcile_rules の引数 proposals が配列ではありません")
+    proposals: list[CiProposal] = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise GeminiResponseError(
+                "reconcile_rules の proposals 要素がオブジェクトではありません"
+            )
+        kind = item.get("kind")
+        if kind not in ("distill", "merge", "conflict", "demote"):
+            raise GeminiResponseError(f"reconcile_rules の kind が不正です: {kind!r}")
+        note = item.get("note")
+        if not isinstance(note, str) or not note:
+            raise GeminiResponseError("reconcile_rules の note が不正です")
+        text = item.get("text") or ""
+        scope = item.get("scope") or "personal"
+        confidence = item.get("confidence") or "med"
+        tags = item.get("tags") or []
+        source = item.get("source") or ""
+        if not isinstance(text, str):
+            raise GeminiResponseError("reconcile_rules の text が不正です")
+        if scope not in ("personal", "team"):
+            raise GeminiResponseError(f"reconcile_rules の scope が不正です: {scope!r}")
+        if confidence not in ("high", "med", "low"):
+            raise GeminiResponseError(
+                f"reconcile_rules の confidence が不正です: {confidence!r}"
+            )
+        if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
+            raise GeminiResponseError("reconcile_rules の tags が不正です")
+        if not isinstance(source, str):
+            raise GeminiResponseError("reconcile_rules の source が不正です")
+        raw_targets = item.get("targetRuleIds") or []
+        if not isinstance(raw_targets, list) or not all(
+            isinstance(t, str) for t in raw_targets
+        ):
+            raise GeminiResponseError("reconcile_rules の targetRuleIds が不正です")
+        # 幻覚 id の除去（実在ルールのみ対象にする。重複も除去）
+        targets: list[str] = []
+        for rule_id in raw_targets:
+            if rule_id in valid_rule_ids and rule_id not in targets:
+                targets.append(rule_id)
+        if len(targets) < _CI_MIN_TARGETS.get(kind, 0):
+            continue  # 対象が実在しない merge/conflict/demote は提案ごと捨てる
+        if kind in ("distill", "merge", "conflict") and not text:
+            continue  # 文案なしでは採用できない（受信箱に出せない）
+        source_task_id = item.get("sourceTaskId")
+        if not isinstance(source_task_id, str) or source_task_id not in valid_task_ids:
+            source_task_id = None
+        proposals.append(
+            CiProposal(
+                kind=kind,
+                text=text,
+                scope=scope,
+                tags=list(tags),
+                confidence=confidence,
+                source=source,
+                target_rule_ids=targets if kind != "distill" else [],
+                note=note,
+                source_task_id=source_task_id if kind == "distill" else None,
+            )
+        )
+    return proposals

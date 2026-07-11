@@ -15,6 +15,7 @@ const CONFIDENCE_RANK: Record<Confidence, number> = { high: 0, med: 1, low: 2 };
 /**
  * タスクに適用されるルールを返す（§6.3 retrieval, MVP はタグ一致・決定的）。
  * personal / team の両 scope を対象にする（§00 #8）。0件なら空配列（セクション非表示, §5.5）。
+ * アーカイブ済み（#26 棚卸し）は BE relevant_rules と同じく除外する。
  */
 export function relevantRules(
   rules: readonly Rule[],
@@ -24,7 +25,8 @@ export function relevantRules(
   return rules
     .filter(
       (rule) =>
-        rule.tags.length === 0 || rule.tags.some((tag) => task.labels.includes(tag)),
+        rule.archived !== true &&
+        (rule.tags.length === 0 || rule.tags.some((tag) => task.labels.includes(tag))),
     )
     .sort(
       (a, b) =>

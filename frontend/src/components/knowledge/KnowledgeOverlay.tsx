@@ -6,10 +6,18 @@
 // （内側は stopPropagation で誤クローズ防止 — §5.3 stop）。
 // #25: ヘッダ下に学習ダッシュボード — スタットタイル4枚（AI完了/ルール適用/差し戻し/累計コスト）
 // ＋ 直近14日のルール適用スパークライン（素SVG・依存なし）＋ TOP3ルール（applied 降順）。
+// #26: タブ（ルール一覧 / 受信箱 N）＋「⟳ 今すぐメンテナンス実行」— 夜間ナレッジCIの提案
+// （新規蒸留/重複統合/矛盾検出/棚卸し）を受信箱で採用/却下する。アーカイブ済みルールは
+// 一覧から除外（retrieval と同じ扱い §6.6）。
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useBoardStore } from '../../store/board.ts';
-import type { RuleApplicationPoint, StatsResponse } from '../../types/api.ts';
+import type {
+  KnowledgeProposal,
+  KnowledgeProposalKind,
+  RuleApplicationPoint,
+  StatsResponse,
+} from '../../types/api.ts';
 import type { Rule } from '../../types/domain.ts';
 import './KnowledgeOverlay.css';
 
@@ -17,9 +25,22 @@ import './KnowledgeOverlay.css';
 export const KNOWLEDGE_EMPTY_TEXT =
   'まだありません。タスクを完了して『✧ 学ぶ』で追加できます';
 
+// 受信箱が空のときの文言（#26）
+export const INBOX_EMPTY_TEXT =
+  '受信箱は空です。夜間メンテナンスAIがナレッジの提案をここに届けます';
+
 // ヘッダ説明文（§3.4）
 const KNOWLEDGE_DESCRIPTION =
   'AIは作業を始める前に、ここのルールを自動で読み込んでから動きます。タスクの履歴から少しずつ蓄積され、あなた専用に賢くなっていきます。';
+
+// #26: 提案 kind の表示メタ（バッジ色は CSS knowledge__kind--{kind} が持つ:
+// 新規=ティール / 統合=パープル / 矛盾=アンバー / 棚卸し=グレー）
+export const PROPOSAL_KIND_META = {
+  distill: { label: '新規' },
+  merge: { label: '統合' },
+  conflict: { label: '矛盾' },
+  demote: { label: '棚卸し' },
+} as const satisfies Record<KnowledgeProposalKind, { label: string }>;
 
 /** タイルのコスト表示（$1 未満は 4桁・以上は 2桁。TraceSection と同規約） */
 export function formatStatsCost(costUsd: number): string {
@@ -163,6 +184,72 @@ function RuleCard({ rule, onPromote, flashStamp }: RuleCardProps) {
   );
 }
 
+// ---- #26 受信箱（ナレッジCIの提案カード） ------------------------------------------
+
+interface ProposalCardProps {
+  proposal: KnowledgeProposal;
+  /** 対象ルールの現文表示用（K-xx -> Rule）。無ければ id のみ表示 */
+  ruleById: ReadonlyMap<string, Rule>;
+  onAdopt: (proposalId: string) => void;
+  onDismiss: (proposalId: string) => void;
+}
+
+/** 提案カード: kind バッジ＋判断説明（note）＋対象ルールの現文と提案文の対比＋採用/却下 */
+function ProposalCard({ proposal, ruleById, onAdopt, onDismiss }: ProposalCardProps) {
+  return (
+    <div className={`knowledge__proposal knowledge__proposal--${proposal.kind}`}>
+      <div className="knowledge__proposal-head">
+        <span className={`knowledge__kind knowledge__kind--${proposal.kind}`}>
+          {PROPOSAL_KIND_META[proposal.kind].label}
+        </span>
+        <span className="knowledge__proposal-note">{proposal.note}</span>
+      </div>
+      {proposal.targetRuleIds.length > 0 && (
+        <div className="knowledge__proposal-targets">
+          {proposal.targetRuleIds.map((ruleId) => (
+            <div key={ruleId} className="knowledge__proposal-target">
+              <span className="knowledge__proposal-marker">現</span>
+              <span className="knowledge__proposal-target-id">{ruleId}</span>
+              <span className="knowledge__proposal-target-text">
+                {ruleById.get(ruleId)?.text ?? ''}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      {proposal.text !== '' && (
+        <div className="knowledge__proposal-draft">
+          <span className="knowledge__proposal-marker knowledge__proposal-marker--draft">
+            案
+          </span>
+          <span className="knowledge__proposal-text">{proposal.text}</span>
+        </div>
+      )}
+      <div className="knowledge__proposal-meta">
+        {proposal.source !== '' && (
+          <span className="knowledge__source">出典: {proposal.source}</span>
+        )}
+        <div className="knowledge__proposal-actions">
+          <button
+            type="button"
+            className="knowledge__adopt"
+            onClick={() => onAdopt(proposal.id)}
+          >
+            採用
+          </button>
+          <button
+            type="button"
+            className="knowledge__dismiss"
+            onClick={() => onDismiss(proposal.id)}
+          >
+            却下
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function KnowledgeOverlay() {
   const showKnowledge = useBoardStore((s) => s.showKnowledge);
   const rules = useBoardStore((s) => s.rules);
@@ -173,15 +260,32 @@ export function KnowledgeOverlay() {
   // #25: 学習ダッシュボード集計（開くたびに最新へ更新。失敗時は前回値/非表示）
   const stats = useBoardStore((s) => s.stats);
   const loadStats = useBoardStore((s) => s.loadStats);
+  // #26: 受信箱（pending の提案）と手動メンテナンス実行
+  const proposals = useBoardStore((s) => s.proposals);
+  const loadProposals = useBoardStore((s) => s.loadProposals);
+  const runKnowledgeCi = useBoardStore((s) => s.runKnowledgeCi);
+  const adoptProposal = useBoardStore((s) => s.adoptProposal);
+  const dismissProposal = useBoardStore((s) => s.dismissProposal);
+  const ciRunning = useBoardStore((s) => s.ciRunning);
+  const ciNotice = useBoardStore((s) => s.ciNotice);
+  // #26: 表示タブ（ルール一覧 / 受信箱）。開き直すたびルール一覧へ戻る
+  const [tab, setTab] = useState<'rules' | 'inbox'>('rules');
 
   useEffect(() => {
-    if (showKnowledge) void loadStats();
-  }, [showKnowledge, loadStats]);
+    if (showKnowledge) {
+      setTab('rules');
+      void loadStats();
+      void loadProposals(); // 受信箱バッジ件数のため一覧も先読み（#26）
+    }
+  }, [showKnowledge, loadStats, loadProposals]);
 
   if (!showKnowledge) return null;
 
-  const personal = rules.filter((r) => r.scope === 'personal');
-  const team = rules.filter((r) => r.scope === 'team');
+  // アーカイブ済み（#26 棚卸し）は一覧から除外（retrieval と同じ扱い §6.6）
+  const visibleRules = rules.filter((r) => r.archived !== true);
+  const personal = visibleRules.filter((r) => r.scope === 'personal');
+  const team = visibleRules.filter((r) => r.scope === 'team');
+  const ruleById = new Map(rules.map((r) => [r.id, r] as const));
 
   return (
     // 遮蔽クリックで閉じる（§3.4）。パネル側は stopPropagation（§5.3 stop）
@@ -197,75 +301,137 @@ export function KnowledgeOverlay() {
             <div className="knowledge__title">ナレッジ — 学習した働き方</div>
             <div className="knowledge__description">{KNOWLEDGE_DESCRIPTION}</div>
           </div>
+          <div className="knowledge__header-actions">
+            {/* #26: 夜間バッチと同じナレッジCIをその場で実行（デモボタン） */}
+            <button
+              type="button"
+              className="knowledge__run-ci"
+              onClick={() => void runKnowledgeCi()}
+              disabled={ciRunning}
+            >
+              {ciRunning ? (
+                <>
+                  <span className="knowledge__spinner" aria-hidden="true" />
+                  実行中…
+                </>
+              ) : (
+                '⟳ 今すぐメンテナンス実行'
+              )}
+            </button>
+            <button
+              type="button"
+              className="knowledge__close"
+              aria-label="閉じる"
+              onClick={closeKnowledge}
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+        {/* #26: 手動実行の完了トースト（件数）。閉じるまで/次の実行までは残す */}
+        {ciNotice !== null && <div className="knowledge__notice">{ciNotice}</div>}
+        {/* #25: 学習ダッシュボード（ヘッダ下）。stats 未取得なら出さない */}
+        {stats !== null && <LearningDashboard stats={stats} rules={visibleRules} />}
+        {/* #26: タブ（ルール一覧 / 受信箱 N）。バッジは SSE でライブ更新される */}
+        <div className="knowledge__tabs" role="tablist">
           <button
             type="button"
-            className="knowledge__close"
-            aria-label="閉じる"
-            onClick={closeKnowledge}
+            role="tab"
+            aria-selected={tab === 'rules'}
+            className={`knowledge__tab${tab === 'rules' ? ' knowledge__tab--active' : ''}`}
+            onClick={() => setTab('rules')}
           >
-            ✕
+            ルール一覧
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'inbox'}
+            className={`knowledge__tab${tab === 'inbox' ? ' knowledge__tab--active' : ''}`}
+            onClick={() => setTab('inbox')}
+          >
+            受信箱
+            <span className="knowledge__tab-badge">{proposals.length}</span>
           </button>
         </div>
-        {/* #25: 学習ダッシュボード（ヘッダ下）。stats 未取得なら出さない */}
-        {stats !== null && <LearningDashboard stats={stats} rules={rules} />}
-        <div className="knowledge__body">
-          <section>
-            <div className="knowledge__section-head">
-              <span className="knowledge__section-icon knowledge__section-icon--you">
-                YK
-              </span>
-              <span className="knowledge__section-title">あなたのルール</span>
-              <span className="knowledge__section-count">{personal.length}</span>
-            </div>
-            <div className="knowledge__rules">
-              {personal.length === 0 ? (
-                <div className="knowledge__empty">{KNOWLEDGE_EMPTY_TEXT}</div>
+        {tab === 'inbox' ? (
+          <div className="knowledge__body">
+            <div className="knowledge__proposals">
+              {proposals.length === 0 ? (
+                <div className="knowledge__empty">{INBOX_EMPTY_TEXT}</div>
               ) : (
-                personal.map((rule) => (
-                  <RuleCard
-                    // #20: 適用時刻を key に含め、再適用のたびフラッシュを再生する
-                    key={
-                      justApplied[rule.id] === undefined
-                        ? rule.id
-                        : `${rule.id}-${justApplied[rule.id]}`
-                    }
-                    rule={rule}
-                    onPromote={(id) => void promoteRule(id)}
-                    flashStamp={justApplied[rule.id]}
+                proposals.map((proposal) => (
+                  <ProposalCard
+                    key={proposal.id}
+                    proposal={proposal}
+                    ruleById={ruleById}
+                    onAdopt={(id) => void adoptProposal(id)}
+                    onDismiss={(id) => void dismissProposal(id)}
                   />
                 ))
               )}
             </div>
-          </section>
-          <section>
-            <div className="knowledge__section-head">
-              <span className="knowledge__section-icon knowledge__section-icon--team">
-                ◎
-              </span>
-              <span className="knowledge__section-title">
-                チームのルール（形式知）
-              </span>
-              <span className="knowledge__section-count">{team.length}</span>
-            </div>
-            <div className="knowledge__rules">
-              {team.length === 0 ? (
-                <div className="knowledge__empty">{KNOWLEDGE_EMPTY_TEXT}</div>
-              ) : (
-                team.map((rule) => (
-                  <RuleCard
-                    key={
-                      justApplied[rule.id] === undefined
-                        ? rule.id
-                        : `${rule.id}-${justApplied[rule.id]}`
-                    }
-                    rule={rule}
-                    flashStamp={justApplied[rule.id]}
-                  />
-                ))
-              )}
-            </div>
-          </section>
-        </div>
+          </div>
+        ) : (
+          <div className="knowledge__body">
+            <section>
+              <div className="knowledge__section-head">
+                <span className="knowledge__section-icon knowledge__section-icon--you">
+                  YK
+                </span>
+                <span className="knowledge__section-title">あなたのルール</span>
+                <span className="knowledge__section-count">{personal.length}</span>
+              </div>
+              <div className="knowledge__rules">
+                {personal.length === 0 ? (
+                  <div className="knowledge__empty">{KNOWLEDGE_EMPTY_TEXT}</div>
+                ) : (
+                  personal.map((rule) => (
+                    <RuleCard
+                      // #20: 適用時刻を key に含め、再適用のたびフラッシュを再生する
+                      key={
+                        justApplied[rule.id] === undefined
+                          ? rule.id
+                          : `${rule.id}-${justApplied[rule.id]}`
+                      }
+                      rule={rule}
+                      onPromote={(id) => void promoteRule(id)}
+                      flashStamp={justApplied[rule.id]}
+                    />
+                  ))
+                )}
+              </div>
+            </section>
+            <section>
+              <div className="knowledge__section-head">
+                <span className="knowledge__section-icon knowledge__section-icon--team">
+                  ◎
+                </span>
+                <span className="knowledge__section-title">
+                  チームのルール（形式知）
+                </span>
+                <span className="knowledge__section-count">{team.length}</span>
+              </div>
+              <div className="knowledge__rules">
+                {team.length === 0 ? (
+                  <div className="knowledge__empty">{KNOWLEDGE_EMPTY_TEXT}</div>
+                ) : (
+                  team.map((rule) => (
+                    <RuleCard
+                      key={
+                        justApplied[rule.id] === undefined
+                          ? rule.id
+                          : `${rule.id}-${justApplied[rule.id]}`
+                      }
+                      rule={rule}
+                      flashStamp={justApplied[rule.id]}
+                    />
+                  ))
+                )}
+              </div>
+            </section>
+          </div>
+        )}
       </div>
     </div>
   );

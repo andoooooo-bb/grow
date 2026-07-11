@@ -91,6 +91,9 @@ create table rules (
   confidence text not null default 'med',
   applied int not null default 0,
   last_applied_at timestamptz,
+  -- 棚卸しアーカイブ（#26 §6.6）: true は retrieval（relevant_rules）から除外される。
+  -- 物理削除はしない（rule_applications の証跡・説明可能性を保つ）
+  archived boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
   -- 将来: embedding vector(1536)  -- pgvector で意味検索（§06）
@@ -106,15 +109,60 @@ create table rule_applications (   -- どのルールをどのタスクに適用
 );
 
 -- 手動蒸留での人の採用/却下ログ（§6.4a）。将来の半自動/自動化のお手本データ（#13）
+-- task_id は nullable（#26: 夜間ナレッジCI由来の提案はタスクに紐づかないことがある）
 create table rule_feedback (
   id uuid primary key default gen_random_uuid(),
-  task_id uuid not null references tasks(id) on delete cascade,
+  task_id uuid references tasks(id) on delete cascade,
   action text not null,             -- 'adopt' | 'dismiss'
   text text not null,
   scope text not null,
   tags text[] not null default '{}',
   confidence text not null,
   created_at timestamptz not null default now()
+);
+
+-- 夜間ナレッジCIの提案受信箱（#26 §6.4b/c）。人が朝まとめて採用/却下する
+create table rule_proposals (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references workspaces(id),
+  kind text not null,               -- 'distill' | 'merge' | 'conflict' | 'demote'
+  text text not null default '',    -- 新規/置き換えルールの文案（demote は空）
+  scope text not null default 'personal',
+  tags text[] not null default '{}',
+  confidence text not null default 'med',
+  source text not null default '',
+  -- merge/conflict/demote の対象既存ルール（distill は空配列）
+  target_rule_ids uuid[] not null default '{}',
+  note text not null default '',    -- AIの判断説明（受信箱カードに表示）
+  source_task_id uuid references tasks(id),  -- distill の由来タスク
+  status text not null default 'pending',    -- 'pending' | 'adopted' | 'dismissed'
+  created_at timestamptz not null default now(),
+  decided_at timestamptz
+);
+create index on rule_proposals (workspace_id, status, created_at);
+
+-- レビュー承認/差し戻しの暗黙評価（#26 §6.6）。確度の自動昇降格の材料
+create table rule_signals (
+  id uuid primary key default gen_random_uuid(),
+  rule_id uuid not null references rules(id) on delete cascade,
+  task_id uuid not null references tasks(id) on delete cascade,
+  signal text not null,             -- 'positive'（承認）| 'negative'（差し戻し/再開）
+  created_at timestamptz not null default now()
+);
+create index on rule_signals (rule_id, signal);
+
+-- 夜間ナレッジCIの実行記録（#26）。可観測性とコスト集計
+create table knowledge_ci_runs (
+  id uuid primary key default gen_random_uuid(),
+  trigger text not null,            -- 'scheduled'（Cloud Scheduler）| 'manual'（デモボタン）
+  proposals_created int not null default 0,
+  rules_scanned int not null default 0,
+  tasks_scanned int not null default 0,
+  input_tokens int,
+  output_tokens int,
+  cost_usd numeric(10,4),
+  started_at timestamptz not null default now(),
+  finished_at timestamptz
 );
 
 create table ai_jobs (

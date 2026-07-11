@@ -10,6 +10,10 @@ import type {
   ChatSendRequest,
   CommentCreate,
   JobsResponse,
+  KnowledgeAdoptResponse,
+  KnowledgeCiRunResponse,
+  KnowledgeProposal,
+  KnowledgeProposalsResponse,
   LearnDecisionRequest,
   RejectRequest,
   RuleProposalDto,
@@ -210,4 +214,42 @@ export async function dismissLearn(
 /** 個人ルールをチームへ昇格する（#14 §1.8 promoteRule）。200 で scope=team の Rule（冪等）。 */
 export function promoteRule(ruleId: string): Promise<Rule> {
   return request<Rule>(`/api/rules/${ruleId}/promote`, { method: 'POST' });
+}
+
+// ---- 夜間ナレッジCI（#26 受信箱・手動実行） ----
+
+/** pending の提案一覧（受信箱）を新しい順で取得する（#26）。 */
+export function getKnowledgeProposals(): Promise<KnowledgeProposalsResponse> {
+  return request<KnowledgeProposalsResponse>('/api/knowledge/proposals');
+}
+
+/**
+ * ナレッジCIを手動で即時実行する（#26「⟳ 今すぐメンテナンス実行」）。
+ * 提案の追加は SSE（rule_proposal.created）でも届くが、応答の件数をトーストに使う。
+ */
+export function runKnowledgeCi(): Promise<KnowledgeCiRunResponse> {
+  return request<KnowledgeCiRunResponse>('/api/knowledge/ci/run', { method: 'POST' });
+}
+
+/**
+ * 提案を採用する（#26）。kind 別に BE が反映（distill/merge/conflict は新ルール作成、
+ * merge/conflict/demote は対象を archived 化）。SSE（rule.created/rule.updated）でも同期される。
+ */
+export function adoptKnowledgeProposal(
+  proposalId: string,
+): Promise<KnowledgeAdoptResponse> {
+  return request<KnowledgeAdoptResponse>(
+    `/api/knowledge/proposals/${proposalId}/adopt`,
+    { method: 'POST' },
+  );
+}
+
+/** 提案を却下する（#26。feedback 記録のみ）。決定済みの提案を返す。 */
+export function dismissKnowledgeProposal(
+  proposalId: string,
+): Promise<KnowledgeProposal> {
+  return request<KnowledgeProposal>(
+    `/api/knowledge/proposals/${proposalId}/dismiss`,
+    { method: 'POST' },
+  );
 }

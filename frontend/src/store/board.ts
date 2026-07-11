@@ -4,6 +4,7 @@
 
 import { create } from 'zustand';
 import {
+  adoptKnowledgeProposal as adoptKnowledgeProposalRequest,
   adoptLearn as adoptLearnRequest,
   assignAi as assignAiRequest,
   autopilot as autopilotRequest,
@@ -11,16 +12,19 @@ import {
   createArtifact,
   createComment,
   createTask,
+  dismissKnowledgeProposal as dismissKnowledgeProposalRequest,
   dismissLearn as dismissLearnRequest,
   getArtifacts,
   getComments,
   getJobs,
+  getKnowledgeProposals,
   getLearnProposals,
   getStats,
   getTrace,
   patchTask,
   promoteRule as promoteRuleRequest,
   rejectTask as rejectTaskRequest,
+  runKnowledgeCi as runKnowledgeCiRequest,
   sendChatMessage,
   startChat as startChatRequest,
 } from '../lib/api.ts';
@@ -28,7 +32,9 @@ import { canTransition } from '../lib/stateMachine.ts';
 import type {
   ArtifactDeltaEvent,
   BoardResponse,
+  KnowledgeProposal,
   LaneDto,
+  RuleProposalCreatedEvent,
   StatsResponse,
   SubtaskProposal,
   SubtaskProposalEvent,
@@ -109,6 +115,12 @@ export interface BoardState {
   // #25: taskId -> 表示中の成果物 version（null/未設定 = 最新に追従）。
   // ArtifactSection の版セレクタと TraceSection のハイライトが共有する
   artifactVersion: Record<string, number | null>;
+  // #26: ナレッジCI受信箱（pending の提案。新しい順）。KnowledgeOverlay の受信箱タブが読む
+  proposals: KnowledgeProposal[];
+  // #26: 「⟳ 今すぐメンテナンス実行」の実行中フラグ（ボタン無効化＋スピナー）
+  ciRunning: boolean;
+  // #26: 手動実行完了のトースト文言（null = 非表示。オーバーレイを閉じるとクリア）
+  ciNotice: string | null;
 }
 
 export interface BoardActions {
@@ -243,6 +255,23 @@ export interface BoardActions {
    */
   promoteRule: (ruleId: string) => Promise<void>;
 
+  // ---- 夜間ナレッジCI受信箱（#26 / §6.4b/c） ----
+  /** GET /api/knowledge/proposals で受信箱を読み込む（オーバーレイを開いたとき）。失敗は前回値 */
+  loadProposals: () => Promise<void>;
+  /**
+   * POST /api/knowledge/ci/run（「⟳ 今すぐメンテナンス実行」）。実行中は ciRunning、
+   * 完了で受信箱を再読込し件数トースト（ciNotice）を出す。失敗は boardError。
+   */
+  runKnowledgeCi: () => Promise<void>;
+  /**
+   * POST /api/knowledge/proposals/:id/adopt。応答で提案を受信箱から除去し、
+   * 新ルール（isNew=true）と対象のアーカイブ化を rules へ反映する
+   * （SSE の rule.created / rule.updated が先着しても upsert で一本化される）。
+   */
+  adoptProposal: (proposalId: string) => Promise<void>;
+  /** POST /api/knowledge/proposals/:id/dismiss。提案を受信箱から除去する（feedback は BE） */
+  dismissProposal: (proposalId: string) => Promise<void>;
+
   // ---- SSE 適用（#7 / #10 / #12 / src/lib/sse.ts から呼ばれる） ----
   /** task.updated: カードを差し替え、レーン移動も反映（全レーンから除去→laneKey へ挿入） */
   applyTaskUpdated: (task: Task) => void;
@@ -274,6 +303,11 @@ export interface BoardActions {
    * 適用ルール行・ナレッジカード・「◈ ナレッジ」のフラッシュ演出を発火する。
    */
   applyRuleUpdated: (rule: Rule) => void;
+  /**
+   * rule_proposal.created: ナレッジCIの新提案を受信箱へ追加する（#26。id で重複排除）。
+   * 受信箱タブのバッジ件数がライブ更新される（夜間バッチ・手動実行の両方）。
+   */
+  applyRuleProposalCreated: (event: RuleProposalCreatedEvent) => void;
 }
 
 export type BoardStore = BoardState & BoardActions;
@@ -308,6 +342,9 @@ export function createInitialBoardState(): BoardState {
     trace: {},
     stats: null,
     artifactVersion: {},
+    proposals: [],
+    ciRunning: false,
+    ciNotice: null,
   };
 }
 
@@ -382,7 +419,8 @@ export const useBoardStore = create<BoardStore>()((set, get) => ({
   closePanel: () => set({ selectedId: null }),
   setPanelMode: (mode) => set({ panelMode: mode }),
   openKnowledge: () => set({ showKnowledge: true }),
-  closeKnowledge: () => set({ showKnowledge: false }),
+  // 閉じるときに完了トースト（#26 ciNotice）も消す（次回開いたときの残骸を防ぐ）
+  closeKnowledge: () => set({ showKnowledge: false, ciNotice: null }),
   setDraft: (taskId, text) =>
     set((s) => ({ drafts: { ...s.drafts, [taskId]: text } })),
   setChatDraft: (taskId, text) =>
@@ -898,6 +936,63 @@ export const useBoardStore = create<BoardStore>()((set, get) => ({
     }
   },
 
+  // ---- 夜間ナレッジCI受信箱（#26 / §6.4b/c） ----
+  loadProposals: async () => {
+    try {
+      const res = await getKnowledgeProposals();
+      if (!Array.isArray(res?.proposals)) return; // 予期しない応答は無視（前回値のまま）
+      set({ proposals: res.proposals });
+    } catch {
+      // 取得失敗は前回値のまま（初回なら空 = 受信箱は空表示）
+    }
+  },
+  runKnowledgeCi: async () => {
+    if (get().ciRunning) return; // 二重実行防止（実行中はボタンも無効）
+    set({ ciRunning: true, ciNotice: null, boardError: null });
+    try {
+      const res = await runKnowledgeCiRequest();
+      // 受信箱を最新化（SSE の rule_proposal.created が先着していても置き換えで一致する）
+      await get().loadProposals();
+      set({ ciNotice: CI_NOTICE_TEMPLATE(res.proposalsCreated) });
+    } catch {
+      set({ boardError: 'メンテナンスの実行に失敗しました' });
+    } finally {
+      set({ ciRunning: false });
+    }
+  },
+  adoptProposal: async (proposalId) => {
+    set({ boardError: null });
+    try {
+      const res = await adoptKnowledgeProposalRequest(proposalId);
+      set((st) => {
+        // 対象既存ルールのアーカイブ化を反映（KnowledgeOverlay 一覧・retrieval から消える）
+        let rules = st.rules.map((r) =>
+          res.archivedRuleIds.includes(r.id) ? { ...r, archived: true } : r,
+        );
+        // 新ルール（distill/merge/conflict）は NEW バッジ付きで upsert
+        if (res.rule != null) rules = upsertRule(rules, { ...res.rule, isNew: true });
+        return {
+          rules,
+          proposals: st.proposals.filter((p) => p.id !== proposalId),
+        };
+      });
+    } catch {
+      // 失敗時は提案カードを残す（§5.4）
+      set({ boardError: '提案の反映に失敗しました' });
+    }
+  },
+  dismissProposal: async (proposalId) => {
+    set({ boardError: null });
+    try {
+      await dismissKnowledgeProposalRequest(proposalId);
+      set((st) => ({
+        proposals: st.proposals.filter((p) => p.id !== proposalId),
+      }));
+    } catch {
+      set({ boardError: '提案の却下に失敗しました' });
+    }
+  },
+
   // ---- SSE 適用（#7 / #10 / #12） ----
   applyTaskUpdated: (task) => {
     const prev = get().cards[task.id];
@@ -1047,7 +1142,20 @@ export const useBoardStore = create<BoardStore>()((set, get) => ({
           : {}),
       };
     }),
+  applyRuleProposalCreated: (event) =>
+    set((s) => {
+      // id 重複排除（手動実行の loadProposals と SSE の二重適用・再配信への冪等ガード）
+      const known = new Set(s.proposals.map((p) => p.id));
+      const added = event.proposals.filter((p) => !known.has(p.id));
+      if (added.length === 0) return {};
+      return { proposals: [...added, ...s.proposals] };
+    }),
 }));
+
+// #26: 手動メンテナンス完了トーストの文言（テストと共有する単一の真実）
+export function CI_NOTICE_TEMPLATE(count: number): string {
+  return `メンテナンス完了: 新しい提案 ${count}件`;
+}
 
 // ---- 派生値（§5.1: render のたび計算, 保存しない） ----
 

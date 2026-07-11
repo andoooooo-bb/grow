@@ -64,8 +64,10 @@ async def api_client(test_db_url: str, monkeypatch: pytest.MonkeyPatch):
     conn = await asyncpg.connect(test_db_url, timeout=3)
     try:
         await conn.execute(
+            # rule_signals / rule_proposals / rule_feedback は cascade（rules/tasks/workspaces
+            # への FK）で共に消える。knowledge_ci_runs は FK を持たないため明示する（#26）
             "truncate workspaces, users, boards, lanes, tasks, comments, chat_messages, "
-            "rules, rule_applications, ai_jobs, artifacts cascade"
+            "rules, rule_applications, ai_jobs, artifacts, knowledge_ci_runs cascade"
         )
         await conn.execute((_DB_DIR / "seed.sql").read_text())
     finally:

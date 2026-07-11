@@ -257,3 +257,73 @@ class LearnDecisionRequest(CamelModel):
     scope: RuleScope
     tags: list[str]
     confidence: Confidence
+
+
+# ---- 夜間ナレッジCI（#26 §6.4b/c・§6.6） ----
+class KnowledgeProposalDto(CamelModel):
+    """rule_proposals の1行（受信箱カード）。
+
+    - kind: 'distill'（新規蒸留）| 'merge'（重複統合）| 'conflict'（矛盾の置き換え）
+      | 'demote'（棚卸しアーカイブ）
+    - target_rule_ids は対象既存ルールの human_id（例 ["K-04","K-06"]）。
+      FE は store の rules から現文を引いて提案文と対比表示する。
+    - note は AI の判断説明。id は UUID（human_id は振らない — 提案は一過性のため）。
+    """
+
+    id: str
+    workspace_id: str
+    kind: str  # 'distill' | 'merge' | 'conflict' | 'demote'
+    text: str
+    scope: RuleScope
+    tags: list[str]
+    confidence: Confidence
+    source: str
+    target_rule_ids: list[str]
+    note: str
+    source_task_id: str | None = None  # distill の由来タスク（human_id）
+    status: str  # 'pending' | 'adopted' | 'dismissed'
+    created_at: str
+    decided_at: str | None = None
+
+
+class KnowledgeProposalsResponse(CamelModel):
+    """GET /api/knowledge/proposals（pending の受信箱一覧。作成の新しい順）。"""
+
+    proposals: list[KnowledgeProposalDto]
+
+
+class KnowledgeCiRunResponse(CamelModel):
+    """POST /api/knowledge/ci/run・/internal/knowledge/ci の応答（実行結果サマリー）。"""
+
+    run_id: str
+    proposals_created: int
+
+
+class KnowledgeAdoptResponse(CamelModel):
+    """POST /api/knowledge/proposals/:id/adopt の応答。
+
+    - rule: distill/merge/conflict で新規作成されたルール（demote は null）
+    - archived_rule_ids: アーカイブした既存ルールの human_id
+    """
+
+    proposal: KnowledgeProposalDto
+    rule: Rule | None = None
+    archived_rule_ids: list[str] = []
+
+
+class RuleProposalCreatedEvent(CamelModel):
+    """rule_proposal.created イベントの payload（#26。受信箱のライブ更新）。"""
+
+    count: int
+    proposals: list[KnowledgeProposalDto]
+
+
+class KnowledgeCiCompletedEvent(CamelModel):
+    """knowledge.ci.completed イベントの payload（#26。実行サマリー）。"""
+
+    run_id: str
+    trigger: str  # 'scheduled' | 'manual'
+    proposals_created: int
+    rules_scanned: int
+    tasks_scanned: int
+    cost_usd: float

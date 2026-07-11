@@ -26,6 +26,7 @@ async def relevant_rules(
 
     - 対象: tags が空（全体ルール）または task.labels と交差するもの。
       personal / team の両 scope を対象にする（§00 #8）。
+      アーカイブ済み（#26 棚卸し）は除外する。
     - 並び: confidence 降順（high > med > low）→ 同 confidence は applied 降順
       → 決定性のため human_id 昇順。上限 limit 件（既定 8）で足切り。
     """
@@ -34,6 +35,7 @@ async def relevant_rules(
         select * from rules
         where workspace_id = $1
           and (cardinality(tags) = 0 or tags && $2::text[])
+          and not archived
         order by
           case confidence when 'high' then 0 when 'med' then 1 else 2 end,
           applied desc,
@@ -111,6 +113,7 @@ def _row_to_rule(row: asyncpg.Record, source_task_human_id: str | None) -> Rule:
         last_applied_at=(
             row["last_applied_at"].isoformat() if row["last_applied_at"] is not None else None
         ),
+        archived=row["archived"],
         created_at=row["created_at"].isoformat(),
         updated_at=row["updated_at"].isoformat(),
     )
@@ -201,6 +204,12 @@ _CONFIDENCE_DOWNGRADE: dict[str, Confidence] = {
     "med": Confidence.LOW,
 }
 
+# confidence の1段昇格の対応（#26 §6.6。high が上限 — それ以上は上げない）
+_CONFIDENCE_UPGRADE: dict[str, Confidence] = {
+    "med": Confidence.HIGH,
+    "low": Confidence.MED,
+}
+
 
 async def downgrade_confidence(
     conn: asyncpg.Connection, row: asyncpg.Record
@@ -220,6 +229,65 @@ async def downgrade_confidence(
         next_confidence.value,
     )
     return await rule_dto_from_row(conn, new_row)
+
+
+async def upgrade_confidence(
+    conn: asyncpg.Connection, row: asyncpg.Record
+) -> Rule | None:
+    """ルールの confidence を1段昇格する（#26 §6.6 確度ライフサイクル）。
+
+    low→med / med→high。既に high なら何もしない（None を返す）。
+    昇格した場合は更新後の Rule DTO を返す（RULE_UPDATED の SSE payload 用）。
+    トランザクション内で呼ぶこと。
+    """
+    next_confidence = _CONFIDENCE_UPGRADE.get(row["confidence"])
+    if next_confidence is None:
+        return None
+    new_row = await conn.fetchrow(
+        "update rules set confidence = $2, updated_at = now() where id = $1 returning *",
+        row["id"],
+        next_confidence.value,
+    )
+    return await rule_dto_from_row(conn, new_row)
+
+
+# ---- 暗黙評価シグナル（#26 §6.6。レビュー承認/差し戻しの自動記録） -------------------
+
+# (from_status, to_status) → シグナル。§5.6 の承認/差し戻し/再開の遷移に対応する
+_TRANSITION_SIGNALS: dict[tuple[str, str], str] = {
+    ("you_review", "done"): "positive",  # 承認
+    ("reviewing", "done"): "positive",  # 承認
+    ("you_review", "ai_work"): "negative",  # 差し戻し
+    ("reviewing", "ai_work"): "negative",  # 差し戻し
+    ("done", "you_todo"): "negative",  # 完了の再オープン（暗黙の不満）
+}
+
+
+async def record_transition_signals(
+    conn: asyncpg.Connection, task_row: asyncpg.Record, *, old_status: str, new_status: str
+) -> None:
+    """ステータス遷移を適用済みルールへの暗黙評価として rule_signals に記録する（#26）。
+
+    承認（you_review/reviewing→done）は positive、差し戻し（→ai_work）と
+    再オープン（done→you_todo）は negative を、直近 execute ジョブの
+    applied_rule_ids 全件に記録する。対象ジョブが無ければ何もしない。
+    repo/tasks.py apply_patch の遷移フックから呼ばれる（トランザクション内）。
+    """
+    signal = _TRANSITION_SIGNALS.get((old_status, new_status))
+    if signal is None:
+        return
+    rule_ids = await conn.fetchval(
+        "select applied_rule_ids from ai_jobs "
+        "where task_id = $1 and kind = 'execute' "
+        "order by created_at desc, id desc limit 1",
+        task_row["id"],
+    )
+    if not rule_ids:
+        return
+    await conn.executemany(
+        "insert into rule_signals (rule_id, task_id, signal) values ($1, $2, $3)",
+        [(rule_id, task_row["id"], signal) for rule_id in rule_ids],
+    )
 
 
 async def add_feedback(

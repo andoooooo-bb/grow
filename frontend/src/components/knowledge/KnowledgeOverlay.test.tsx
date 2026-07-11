@@ -1,11 +1,16 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createInitialBoardState, useBoardStore } from '../../store/board.ts';
+import {
+  CI_NOTICE_TEMPLATE,
+  createInitialBoardState,
+  useBoardStore,
+} from '../../store/board.ts';
 import { boardFixture } from '../../test/boardFixture.ts';
-import type { StatsResponse } from '../../types/api.ts';
+import type { KnowledgeProposal, StatsResponse } from '../../types/api.ts';
 import type { Rule } from '../../types/domain.ts';
 import {
   formatStatsCost,
+  INBOX_EMPTY_TEXT,
   KNOWLEDGE_EMPTY_TEXT,
   KnowledgeOverlay,
   topAppliedRules,
@@ -276,5 +281,229 @@ describe('topAppliedRules / formatStatsCost（#25 単体）', () => {
     expect(formatStatsCost(0)).toBe('$0.0000');
     expect(formatStatsCost(0.0231)).toBe('$0.0231');
     expect(formatStatsCost(12.5)).toBe('$12.50');
+  });
+});
+
+// ---- #26: 夜間ナレッジCI（受信箱タブ・採用/却下・手動実行） ----
+
+function proposalFixture(partial: Partial<KnowledgeProposal> = {}): KnowledgeProposal {
+  return {
+    id: 'prop-1',
+    workspaceId: 'ws-1',
+    kind: 'conflict',
+    text: '報告書は常体で書く',
+    scope: 'personal',
+    tags: [],
+    confidence: 'med',
+    source: 'ナレッジCI: K-04 と K-06 の矛盾検出',
+    targetRuleIds: ['K-04'],
+    note: '「敬体」と「常体」の方針が矛盾しています',
+    sourceTaskId: null,
+    status: 'pending',
+    createdAt: '2026-07-11T03:00:00Z',
+    decidedAt: null,
+    ...partial,
+  };
+}
+
+describe('KnowledgeOverlay: 受信箱タブ（#26）', () => {
+  it('タブ「ルール一覧 / 受信箱 N」を表示し、バッジに pending 件数を出す', () => {
+    useBoardStore.setState({
+      proposals: [proposalFixture(), proposalFixture({ id: 'prop-2', kind: 'demote' })],
+    });
+    const { container } = render(<KnowledgeOverlay />);
+    expect(screen.getByRole('tab', { name: 'ルール一覧' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /受信箱/ })).toBeInTheDocument();
+    expect(container.querySelector('.knowledge__tab-badge')?.textContent).toBe('2');
+    // 既定はルール一覧タブ（既存2セクションが見えている）
+    expect(screen.getByText('あなたのルール')).toBeInTheDocument();
+  });
+
+  it('受信箱タブへ切り替えると提案カード（kindバッジ・対比表示・note）が出る', () => {
+    useBoardStore.setState({ proposals: [proposalFixture()] });
+    const { container } = render(<KnowledgeOverlay />);
+    fireEvent.click(screen.getByRole('tab', { name: /受信箱/ }));
+
+    // kind バッジ（矛盾=アンバーは CSS クラスで表現）
+    const badge = container.querySelector('.knowledge__kind--conflict');
+    expect(badge?.textContent).toBe('矛盾');
+    // AI の判断説明（note）
+    expect(screen.getByText(/「敬体」と「常体」の方針が矛盾/)).toBeInTheDocument();
+    // 対象ルールの現文（K-04 の text を store の rules から解決）と提案文の対比
+    expect(screen.getByText(rule('K-04').text)).toBeInTheDocument();
+    expect(screen.getByText('報告書は常体で書く')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '採用' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '却下' })).toBeInTheDocument();
+  });
+
+  it('kind ごとのバッジ文言（新規/統合/矛盾/棚卸し）を出す', () => {
+    useBoardStore.setState({
+      proposals: [
+        proposalFixture({ id: 'p1', kind: 'distill', targetRuleIds: [] }),
+        proposalFixture({ id: 'p2', kind: 'merge', targetRuleIds: ['K-01', 'K-03'] }),
+        proposalFixture({ id: 'p3', kind: 'conflict' }),
+        proposalFixture({ id: 'p4', kind: 'demote', text: '', targetRuleIds: ['K-01'] }),
+      ],
+    });
+    render(<KnowledgeOverlay />);
+    fireEvent.click(screen.getByRole('tab', { name: /受信箱/ }));
+    expect(screen.getByText('新規')).toBeInTheDocument();
+    expect(screen.getByText('統合')).toBeInTheDocument();
+    expect(screen.getByText('矛盾')).toBeInTheDocument();
+    expect(screen.getByText('棚卸し')).toBeInTheDocument();
+  });
+
+  it('受信箱が空なら空状態文言を出す', () => {
+    render(<KnowledgeOverlay />);
+    fireEvent.click(screen.getByRole('tab', { name: /受信箱/ }));
+    expect(screen.getByText(INBOX_EMPTY_TEXT)).toBeInTheDocument();
+  });
+
+  it('採用で POST adopt → 提案が消え、新ルールが NEW 付きで rules へ・対象は archived', async () => {
+    useBoardStore.setState({ proposals: [proposalFixture()] });
+    const created: Rule = {
+      ...rule('K-04'),
+      id: 'K-06',
+      text: '報告書は常体で書く',
+      applied: 0,
+    };
+    const fetchMock = vi.fn(async () =>
+      jsonResponse(200, {
+        proposal: proposalFixture({ status: 'adopted' }),
+        rule: created,
+        archivedRuleIds: ['K-04'],
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<KnowledgeOverlay />);
+    fireEvent.click(screen.getByRole('tab', { name: /受信箱/ }));
+    fireEvent.click(screen.getByRole('button', { name: '採用' }));
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/knowledge/proposals/prop-1/adopt', {
+      method: 'POST',
+    });
+    await waitFor(() =>
+      expect(useBoardStore.getState().proposals).toEqual([]),
+    );
+    const rules = useBoardStore.getState().rules;
+    expect(rules.find((r) => r.id === 'K-06')?.isNew).toBe(true);
+    expect(rules.find((r) => r.id === 'K-04')?.archived).toBe(true);
+    // アーカイブ済みはルール一覧から消えている（チームのルールは K-05 のみ）
+    expect(screen.getByText(INBOX_EMPTY_TEXT)).toBeInTheDocument();
+  });
+
+  it('却下で POST dismiss → 提案だけが消える（rules は不変）', async () => {
+    useBoardStore.setState({ proposals: [proposalFixture({ kind: 'demote', text: '' })] });
+    const fetchMock = vi.fn(async () =>
+      jsonResponse(200, proposalFixture({ status: 'dismissed' })),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<KnowledgeOverlay />);
+    fireEvent.click(screen.getByRole('tab', { name: /受信箱/ }));
+    const before = useBoardStore.getState().rules;
+    fireEvent.click(screen.getByRole('button', { name: '却下' }));
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/knowledge/proposals/prop-1/dismiss', {
+      method: 'POST',
+    });
+    await waitFor(() => expect(useBoardStore.getState().proposals).toEqual([]));
+    expect(useBoardStore.getState().rules).toEqual(before);
+  });
+
+  it('アーカイブ済みルールはルール一覧・件数から除外される', () => {
+    useBoardStore.setState((s) => ({
+      rules: s.rules.map((r) => (r.id === 'K-01' ? { ...r, archived: true } : r)),
+    }));
+    const { container } = render(<KnowledgeOverlay />);
+    const counts = [...container.querySelectorAll('.knowledge__section-count')];
+    expect(counts.map((el) => el.textContent)).toEqual(['2', '2']); // personal 3→2
+    expect(screen.queryByText(rule('K-01').text)).not.toBeInTheDocument();
+  });
+});
+
+describe('KnowledgeOverlay: 今すぐメンテナンス実行（#26）', () => {
+  it('ボタンで POST /api/knowledge/ci/run → 受信箱を再読込し件数トーストを出す', async () => {
+    const proposal = proposalFixture();
+    const fetchMock = vi.fn(async (path: string) => {
+      if (path === '/api/knowledge/ci/run') {
+        return jsonResponse(200, { runId: 'run-1', proposalsCreated: 1 });
+      }
+      if (path === '/api/knowledge/proposals') {
+        return jsonResponse(200, { proposals: [proposal] });
+      }
+      return jsonResponse(200, statsFixture());
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { container } = render(<KnowledgeOverlay />);
+    fireEvent.click(
+      screen.getByRole('button', { name: '⟳ 今すぐメンテナンス実行' }),
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/knowledge/ci/run', { method: 'POST' });
+    await waitFor(() =>
+      expect(screen.getByText(CI_NOTICE_TEMPLATE(1))).toBeInTheDocument(),
+    );
+    // 受信箱バッジもライブ更新される
+    expect(container.querySelector('.knowledge__tab-badge')?.textContent).toBe('1');
+    expect(useBoardStore.getState().ciRunning).toBe(false);
+  });
+
+  it('実行中はボタンが無効（スピナー表示）', () => {
+    useBoardStore.setState({ ciRunning: true });
+    const { container } = render(<KnowledgeOverlay />);
+    const button = screen.getByRole('button', { name: /実行中/ });
+    expect(button).toBeDisabled();
+    expect(container.querySelector('.knowledge__spinner')).not.toBeNull();
+  });
+
+  it('失敗時は boardError を立ててボタンを再度有効にする', async () => {
+    const fetchMock = vi.fn(async (path: string) =>
+      path === '/api/knowledge/ci/run'
+        ? jsonResponse(500, {})
+        : jsonResponse(200, statsFixture()),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<KnowledgeOverlay />);
+    fireEvent.click(
+      screen.getByRole('button', { name: '⟳ 今すぐメンテナンス実行' }),
+    );
+    await waitFor(() =>
+      expect(useBoardStore.getState().boardError).toBe(
+        'メンテナンスの実行に失敗しました',
+      ),
+    );
+    expect(useBoardStore.getState().ciRunning).toBe(false);
+    expect(useBoardStore.getState().ciNotice).toBeNull();
+  });
+});
+
+describe('applyRuleProposalCreated（#26 SSE ライブ更新）', () => {
+  it('新提案を受信箱の先頭へ追加し、既知 id は重複させない（冪等）', () => {
+    const existing = proposalFixture();
+    useBoardStore.setState({ proposals: [existing] });
+    const incoming = proposalFixture({ id: 'prop-2', kind: 'distill' });
+    useBoardStore
+      .getState()
+      .applyRuleProposalCreated({ count: 2, proposals: [existing, incoming] });
+    expect(useBoardStore.getState().proposals.map((p) => p.id)).toEqual([
+      'prop-2',
+      'prop-1',
+    ]);
+    // 同じイベントを再適用しても増えない
+    useBoardStore
+      .getState()
+      .applyRuleProposalCreated({ count: 2, proposals: [existing, incoming] });
+    expect(useBoardStore.getState().proposals).toHaveLength(2);
+  });
+
+  it('closeKnowledge で ciNotice をクリアする', () => {
+    useBoardStore.setState({ ciNotice: CI_NOTICE_TEMPLATE(3) });
+    useBoardStore.getState().closeKnowledge();
+    expect(useBoardStore.getState().ciNotice).toBeNull();
+    expect(useBoardStore.getState().showKnowledge).toBe(false);
   });
 });

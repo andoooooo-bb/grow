@@ -16,11 +16,13 @@ from app.ai.provider import (
     REVIEW_FINDINGS_MARKER,
     AiProvider,
     ChatReplyResult,
+    CiProposal,
     ExecuteResult,
     NextAction,
     NextActionResult,
     ProposeRulesResult,
     ProposeSubtasksResult,
+    ReconcileResult,
     ReviewResult,
     RuleConflictResult,
     RuleProposal,
@@ -423,3 +425,170 @@ class MockProvider(AiProvider):
                 "- 最新の料金・仕様は人による確認が必要。",
             ]
         return "\n".join(lines)
+
+    # --- 夜間ナレッジCI（#26。4種の提案を決定的に返す） ------------------------------
+
+    async def reconcile_rules(
+        self,
+        existing_rules: list[dict],
+        recent_tasks: list[dict],
+        feedback: list[dict],
+        signals: list[dict],
+    ) -> ReconcileResult:
+        """ナレッジCIの決定的モック（#26 §6.4b/c・§6.6）。
+
+        (a) conflict: 「敬体」を含むルールと「常体」を含むルールの併存を矛盾として検出
+            （新しい方を優先した置き換え文案付き。デモの矛盾シナリオを確実に再現する）
+        (b) merge: 同一 tags かつ text の先頭10字が一致する2ルールを統合提案
+        (c) demote: applied==0・last_applied_at なし・signals なしのルールを棚卸し提案
+        (d) distill: done かつ未蒸留のタスク（先頭1件）から新規ルールを蒸留提案
+        重複フラグを避けるため、(a)(b) が対象にしたルールは (b)(c) の走査から除外する。
+        """
+        proposals: list[CiProposal] = list(self._ci_conflict_proposals(existing_rules))
+        claimed = {rid for p in proposals for rid in p.target_rule_ids}
+        proposals += self._ci_merge_proposals(existing_rules, claimed)
+        claimed = {rid for p in proposals for rid in p.target_rule_ids}
+        proposals += self._ci_demote_proposals(existing_rules, signals, claimed)
+        proposals += self._ci_distill_proposals(recent_tasks)
+        return ReconcileResult(
+            proposals=proposals,
+            usage=self._usage(str(proposals), existing_rules, recent_tasks, feedback, signals),
+        )
+
+    @staticmethod
+    def _ci_conflict_proposals(existing_rules: list[dict]) -> list[CiProposal]:
+        """(a) 敬体 vs 常体の矛盾検出（両方を target に、新しい方の置き換え文案付き）。"""
+        keitai = next((r for r in existing_rules if "敬体" in r.get("text", "")), None)
+        joutai = next((r for r in existing_rules if "常体" in r.get("text", "")), None)
+        if keitai is None or joutai is None or keitai.get("id") == joutai.get("id"):
+            return []
+        # 新しい方（createdAt 降順。欠損・同時刻はリスト後方 = 後に採用された方）を優先
+        older, newer = keitai, joutai
+        if (keitai.get("createdAt") or "") > (joutai.get("createdAt") or ""):
+            older, newer = joutai, keitai
+        return [
+            CiProposal(
+                kind="conflict",
+                text=newer.get("text", ""),
+                scope=newer.get("scope", "personal"),
+                tags=list(newer.get("tags") or []),
+                confidence=newer.get("confidence", "med"),
+                source=f"ナレッジCI: {older.get('id')} と {newer.get('id')} の矛盾検出",
+                target_rule_ids=[str(older.get("id")), str(newer.get("id"))],
+                note=CI_CONFLICT_NOTE,
+            )
+        ]
+
+    @staticmethod
+    def _ci_merge_proposals(existing_rules: list[dict], claimed: set[str]) -> list[CiProposal]:
+        """(b) 同一 tags かつ text 先頭10字一致の2ルールを統合提案（先頭ペアのみ）。"""
+        candidates = [r for r in existing_rules if str(r.get("id")) not in claimed]
+        for i, first in enumerate(candidates):
+            for second in candidates[i + 1 :]:
+                same_tags = sorted(first.get("tags") or []) == sorted(second.get("tags") or [])
+                head = CI_MERGE_PREFIX_CHARS
+                similar = (
+                    (first.get("text") or "")[:head] == (second.get("text") or "")[:head]
+                    and (first.get("text") or "") != ""
+                )
+                if not (same_tags and similar):
+                    continue
+                # 統合文案 = 情報量の多い方（長い方。同長は先勝ち）
+                longer = (
+                    first
+                    if len(first.get("text", "")) >= len(second.get("text", ""))
+                    else second
+                )
+                rank = {"high": 0, "med": 1, "low": 2}
+                stronger = min(
+                    (first, second), key=lambda r: rank.get(r.get("confidence", "med"), 1)
+                )
+                return [
+                    CiProposal(
+                        kind="merge",
+                        text=longer.get("text", ""),
+                        scope=(
+                            "team"
+                            if "team" in (first.get("scope"), second.get("scope"))
+                            else "personal"
+                        ),
+                        tags=list(first.get("tags") or []),
+                        confidence=stronger.get("confidence", "med"),
+                        source=f"ナレッジCI: {first.get('id')} と {second.get('id')} を統合",
+                        target_rule_ids=[str(first.get("id")), str(second.get("id"))],
+                        note=CI_MERGE_NOTE,
+                    )
+                ]
+        return []
+
+    @staticmethod
+    def _ci_demote_proposals(
+        existing_rules: list[dict], signals: list[dict], claimed: set[str]
+    ) -> list[CiProposal]:
+        """(c) 適用実績なし（applied==0・last_applied_at なし・signals なし）の棚卸し提案。"""
+        signalled = {str(s.get("ruleId")) for s in signals}
+        proposals: list[CiProposal] = []
+        for rule in existing_rules:
+            rule_id = str(rule.get("id"))
+            if rule_id in claimed or rule_id in signalled:
+                continue
+            if (rule.get("applied") or 0) > 0 or rule.get("lastAppliedAt"):
+                continue
+            proposals.append(
+                CiProposal(
+                    kind="demote",
+                    text="",
+                    scope=rule.get("scope", "personal"),
+                    tags=list(rule.get("tags") or []),
+                    confidence=rule.get("confidence", "med"),
+                    source=f"ナレッジCI: {rule_id} の棚卸し",
+                    target_rule_ids=[rule_id],
+                    note=CI_DEMOTE_NOTE,
+                )
+            )
+        return proposals
+
+    @staticmethod
+    def _ci_distill_proposals(recent_tasks: list[dict]) -> list[CiProposal]:
+        """(d) done かつ未蒸留のタスク（先頭1件）からの新規蒸留提案。"""
+        target = next(
+            (
+                t
+                for t in recent_tasks
+                if t.get("status") == "done" and not t.get("distilled")
+            ),
+            None,
+        )
+        if target is None:
+            return []
+        human_id = target.get("humanId") or "不明なタスク"
+        return [
+            CiProposal(
+                kind="distill",
+                text=CI_DISTILL_TEXT_TEMPLATE.format(title=target.get("title", "")),
+                scope="personal",
+                tags=list(target.get("labels") or []),
+                confidence="med",
+                source=f"{human_id} の完了履歴から自動蒸留",
+                target_rule_ids=[],
+                note=CI_DISTILL_NOTE,
+                source_task_id=str(human_id),
+            )
+        ]
+
+
+# --- 夜間ナレッジCI（#26）の決定的な文言・しきい値 -----------------------------------
+# （#27 との並行開発のためファイル末尾に追記。クラスからは名前参照で解決される）
+
+# merge 判定の「text 類似」= 先頭10字一致（決定的な単純規則）
+CI_MERGE_PREFIX_CHARS = 10
+
+CI_CONFLICT_NOTE = (
+    "「敬体」と「常体」の方針が矛盾しています。新しいルールを優先した置き換え案です"
+)
+CI_MERGE_NOTE = "同じタグ・似た文面のルールが併存しています。1件に統合する案です"
+CI_DEMOTE_NOTE = "適用実績がないため、アーカイブ（棚卸し）を提案します"
+CI_DISTILL_NOTE = "完了タスクに未蒸留の学びがあります"
+CI_DISTILL_TEXT_TEMPLATE = (
+    "「{title}」で確立した進め方を再利用する（要点サマリー→本文→確認事項の順でまとめる）"
+)

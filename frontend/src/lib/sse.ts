@@ -5,7 +5,11 @@
 //   data: {"type": <type>, "payload": <DTO の camelCase>}
 
 import { useBoardStore } from '../store/board.ts';
-import type { ArtifactDeltaEvent, SubtaskProposalEvent } from '../types/api.ts';
+import type {
+  ArtifactDeltaEvent,
+  RuleProposalCreatedEvent,
+  SubtaskProposalEvent,
+} from '../types/api.ts';
 import type { Artifact, ChatMessage, Comment, Rule, Task } from '../types/domain.ts';
 
 export const EVENTS_URL = '/api/events';
@@ -19,6 +23,8 @@ export const CHAT_MESSAGE_CREATED = 'chat.message.created'; // #11/#12（壁打�
 export const SUBTASK_PROPOSAL = 'subtask.proposal'; // #11/#12（分解候補。サーバ非永続）
 export const RULE_CREATED = 'rule.created'; // #13/#14（蒸留候補の採用）
 export const RULE_UPDATED = 'rule.updated'; // #13/#14（昇格・applied++ の同期）
+export const RULE_PROPOSAL_CREATED = 'rule_proposal.created'; // #26（受信箱のライブ更新）
+export const KNOWLEDGE_CI_COMPLETED = 'knowledge.ci.completed'; // #26（CI実行サマリー）
 
 interface SseEnvelope<T> {
   type: string;
@@ -52,6 +58,7 @@ export function connectEvents(): () => void {
     applySubtaskProposal,
     applyRuleCreated,
     applyRuleUpdated,
+    applyRuleProposalCreated,
   } = useBoardStore.getState();
 
   source.addEventListener(TASK_UPDATED, (e: MessageEvent) => {
@@ -87,6 +94,12 @@ export function connectEvents(): () => void {
   source.addEventListener(RULE_UPDATED, (e: MessageEvent) => {
     const { payload } = JSON.parse(e.data as string) as SseEnvelope<Rule>;
     applyRuleUpdated(payload);
+  });
+  source.addEventListener(RULE_PROPOSAL_CREATED, (e: MessageEvent) => {
+    const { payload } = JSON.parse(
+      e.data as string,
+    ) as SseEnvelope<RuleProposalCreatedEvent>;
+    applyRuleProposalCreated(payload);
   });
 
   return () => source.close();

@@ -14,6 +14,7 @@ from app.routers import (
     comments,
     events,
     jobs,
+    knowledge,
     rules,
     stats,
     tasks,
@@ -32,3 +33,4 @@ api_router.include_router(rules.router)
 api_router.include_router(jobs.router)
 api_router.include_router(trace.router)
 api_router.include_router(stats.router)
+api_router.include_router(knowledge.router)
