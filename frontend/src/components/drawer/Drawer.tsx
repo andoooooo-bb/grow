@@ -17,6 +17,7 @@ import { DrawerHeader } from './DrawerHeader';
 import { LearnSection } from './LearnSection';
 import { LiveDraftSection } from './LiveDraftSection';
 import { SubtaskSection } from './SubtaskSection';
+import { TraceSection } from './TraceSection';
 import './Drawer.css';
 
 export function Drawer() {
@@ -96,6 +97,8 @@ export function Drawer() {
           <SubtaskSection task={task} />
           {/* (d-2) リレー・タイムライン（#19）: ジョブ0件時はコンポーネント側で非表示 */}
           <AgentTimeline task={task} />
+          {/* (d-3) 意思決定トレース（#25）: 版0件時はコンポーネント側で非表示（既定は閉） */}
+          <TraceSection task={task} />
           <ActivityThread taskId={task.id} />
           <Composer taskId={task.id} />
         </div>

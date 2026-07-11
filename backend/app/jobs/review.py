@@ -28,6 +28,7 @@ import asyncpg
 
 from app.ai import get_provider
 from app.ai.provider import REVIEW_FINDINGS_MARKER, ReviewResult
+from app.costs import calc_cost_usd
 from app.db import get_pool
 from app.domain.dto import CommentCreate
 from app.domain.models import (
@@ -380,13 +381,13 @@ async def _revise_cycle_count(conn: asyncpg.Connection, task_row: asyncpg.Record
 async def _mark_succeeded(
     conn: asyncpg.Connection, job_id: str, result: ReviewResult
 ) -> None:
-    """review ジョブを成功確定する（トークン記録。mock は cost 0.0）。"""
+    """review ジョブを成功確定する（トークン記録＋コスト実算定 #25。Flash 単価）。"""
     await ai_jobs_repo.mark_succeeded(
         conn,
         job_id,
         input_tokens=result.usage.input_tokens,
         output_tokens=result.usage.output_tokens,
-        cost_usd=0.0,
+        cost_usd=calc_cost_usd(AiJobKind.REVIEW, result.usage),
     )
 
 

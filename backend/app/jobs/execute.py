@@ -33,6 +33,7 @@ from typing import Any
 import asyncpg
 
 from app.ai import get_provider
+from app.costs import calc_cost_usd
 from app.db import get_pool
 from app.domain.dto import CommentCreate
 from app.domain.models import (
@@ -203,13 +204,14 @@ async def _execute_attempt(job_id: str, *, enqueue_next: bool = True) -> None:
                 kind=AiJobKind.REVIEW,
                 applied_rule_ids=list(job_row["applied_rule_ids"]),
             )
-            # mock は usage をそのまま記録し cost 0.0（実コスト算定は Gemini 実装 #15 で）
+            # コスト実算定（#25）: execute は Pro 単価。usage はストリーム経路でも
+            # provider が返す最終累計（唯一の真実）。mock でも同じ式で $ が動く
             await ai_jobs_repo.mark_succeeded(
                 conn,
                 job_id,
                 input_tokens=result.usage.input_tokens,
                 output_tokens=result.usage.output_tokens,
-                cost_usd=0.0,
+                cost_usd=calc_cost_usd(AiJobKind.EXECUTE, result.usage),
             )
     publish_event(ARTIFACT_CREATED, artifact.model_dump(mode="json", by_alias=True))
     if enqueue_next:
@@ -327,12 +329,13 @@ async def _handoff_plan(job_id: str, task_row: asyncpg.Record, result: Any) -> N
             task = await tasks_repo.apply_patch(
                 conn, row, {"status": TaskStatus.YOU_TODO, "progress": None}
             )
+            # コスト実算定（#25）: L0 のプラン生成も execute ジョブ = Pro 単価
             await ai_jobs_repo.mark_succeeded(
                 conn,
                 job_id,
                 input_tokens=result.usage.input_tokens,
                 output_tokens=result.usage.output_tokens,
-                cost_usd=0.0,
+                cost_usd=calc_cost_usd(AiJobKind.EXECUTE, result.usage),
             )
     publish_event(COMMENT_CREATED, comment.model_dump(mode="json", by_alias=True))
     publish_event(TASK_UPDATED, task.model_dump(mode="json", by_alias=True))

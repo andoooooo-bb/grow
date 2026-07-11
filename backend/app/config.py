@@ -34,6 +34,16 @@ class Settings(BaseSettings):
     gemini_model_execute: str = "gemini-2.5-pro"
     gemini_model_light: str = "gemini-2.5-flash"
 
+    # モデル単価テーブル（#25 コスト実算定。単位: USD / 100万トークン）。
+    # execute = Pro 単価、review/orchestrate/breakdown/distill = Flash 単価
+    # （app/costs.py calc_cost_usd がジョブ kind から導出する）。
+    # 単価改定時は環境変数 PRICE_PRO_INPUT_USD_PER_MTOK 等で上書きできる。
+    # mock プロバイダでも同じ式で算定する（デモでも $ が動く）。
+    price_pro_input_usd_per_mtok: float = 1.25  # gemini-2.5-pro input
+    price_pro_output_usd_per_mtok: float = 10.0  # gemini-2.5-pro output
+    price_flash_input_usd_per_mtok: float = 0.30  # gemini-2.5-flash input
+    price_flash_output_usd_per_mtok: float = 2.50  # gemini-2.5-flash output
+
     # Cloud Tasks が worker エンドポイントへ push する際の自サービスURL
     self_url: str = "http://localhost:8000"
 

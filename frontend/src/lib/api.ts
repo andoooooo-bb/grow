@@ -13,8 +13,10 @@ import type {
   LearnDecisionRequest,
   RejectRequest,
   RuleProposalDto,
+  StatsResponse,
   TaskCreate,
   TaskPatch,
+  TraceResponse,
 } from '../types/api.ts';
 import type { Artifact, ChatMessage, Comment, Rule, Task } from '../types/domain.ts';
 
@@ -152,6 +154,19 @@ export function getArtifacts(taskId: string): Promise<ArtifactResponse> {
 /** AIジョブ履歴を createdAt 昇順で取得する（#19 リレー・タイムライン）。 */
 export function getJobs(taskId: string): Promise<JobsResponse> {
   return request<JobsResponse>(`/api/tasks/${taskId}/jobs`);
+}
+
+/**
+ * 意思決定トレースを version 昇順で取得する（#25 TraceSection）。
+ * 版ごとに「どのジョブが・どのルール（K-xx）を前提に・何トークン/$いくらで生成したか」。
+ */
+export function getTrace(taskId: string): Promise<TraceResponse> {
+  return request<TraceResponse>(`/api/tasks/${taskId}/trace`);
+}
+
+/** 学習・コストダッシュボードの集計を取得する（#25 KnowledgeOverlay スタットタイル）。 */
+export function getStats(): Promise<StatsResponse> {
+  return request<StatsResponse>('/api/stats');
 }
 
 /** 人の編集を新版として保存する（#10 §00 #12）。作成された Artifact（201）を返す。 */

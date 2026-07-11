@@ -1,9 +1,15 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createInitialBoardState, useBoardStore } from '../../store/board.ts';
 import { boardFixture } from '../../test/boardFixture.ts';
+import type { StatsResponse } from '../../types/api.ts';
 import type { Rule } from '../../types/domain.ts';
-import { KNOWLEDGE_EMPTY_TEXT, KnowledgeOverlay } from './KnowledgeOverlay';
+import {
+  formatStatsCost,
+  KNOWLEDGE_EMPTY_TEXT,
+  KnowledgeOverlay,
+  topAppliedRules,
+} from './KnowledgeOverlay';
 
 function jsonResponse(status: number, body: unknown) {
   return { ok: status >= 200 && status < 300, status, json: async () => body };
@@ -169,5 +175,106 @@ describe('KnowledgeOverlay: 適用フラッシュ（#20）', () => {
     const { container } = render(<KnowledgeOverlay />);
     expect(container.querySelector('.knowledge__rule--flash')).toBeNull();
     expect(container.querySelector('.knowledge__applied--bump')).toBeNull();
+  });
+});
+
+// ---- #25: 学習ダッシュボード（スタットタイル＋スパークライン＋TOP3） ----
+
+function statsFixture(partial: Partial<StatsResponse> = {}): StatsResponse {
+  // 直近14日（古い順）。後半に向かって適用が増える学習曲線
+  const ruleApplications = Array.from({ length: 14 }, (_, i) => ({
+    date: `2026-07-${String(i + 1).padStart(2, '0')}`,
+    count: i < 7 ? 0 : i - 6,
+  }));
+  return {
+    aiDoneCount: 4,
+    totalCostUsd: 0.0231,
+    totalTokens: 12345,
+    ruleApplications,
+    ruleApplicationsTotal: 36,
+    rejectCount: 2,
+    rulesCount: 5,
+    ...partial,
+  };
+}
+
+describe('KnowledgeOverlay: 学習ダッシュボード（#25）', () => {
+  it('開くと GET /api/stats を読み込み、スタットタイル4枚を表示する', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(200, statsFixture()));
+    vi.stubGlobal('fetch', fetchMock);
+    const { container } = render(<KnowledgeOverlay />);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/stats', undefined);
+    await waitFor(() =>
+      expect(container.querySelectorAll('.knowledge__tile')).toHaveLength(4),
+    );
+    const tiles = [...container.querySelectorAll('.knowledge__tile')];
+    expect(tiles.map((t) => t.textContent)).toEqual([
+      '4AI完了',
+      '36ルール適用',
+      '2差し戻し',
+      '$0.0231累計コスト',
+    ]);
+  });
+
+  it('直近14日のルール適用スパークライン（素SVG）を描画する', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(200, statsFixture())));
+    const { container } = render(<KnowledgeOverlay />);
+
+    await waitFor(() =>
+      expect(container.querySelector('.knowledge__spark')).toBeInTheDocument(),
+    );
+    expect(screen.getByText('ルール適用の推移（直近14日）')).toBeInTheDocument();
+    // 合計 = 1+2+…+7 = 28 回。単系列なので凡例は無し（見出しが系列名を兼ねる）
+    const svg = screen.getByRole('img', { name: '直近14日のルール適用 計28回' });
+    const polyline = svg.querySelector('polyline.knowledge__spark-line');
+    expect(polyline).not.toBeNull();
+    expect(polyline?.getAttribute('points')?.split(' ')).toHaveLength(14);
+    // 面ウォッシュと端点ドット（サーフェスリング）も描かれる
+    expect(svg.querySelector('.knowledge__spark-area')).not.toBeNull();
+    expect(svg.querySelector('circle.knowledge__spark-dot')).not.toBeNull();
+  });
+
+  it('TOP3ルール（applied 降順: K-02→K-04→K-01）を表示する', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(200, statsFixture())));
+    const { container } = render(<KnowledgeOverlay />);
+
+    await waitFor(() =>
+      expect(container.querySelectorAll('.knowledge__top-rule')).toHaveLength(3),
+    );
+    expect(screen.getByText('よく効いているルール TOP3')).toBeInTheDocument();
+    const rows = [...container.querySelectorAll('.knowledge__top-rule')];
+    expect(
+      rows.map((row) => within(row as HTMLElement).getByText(/^K-\d+$/).textContent),
+    ).toEqual(['K-02', 'K-04', 'K-01']);
+    expect(within(rows[0] as HTMLElement).getByText('適用 14回')).toBeInTheDocument();
+  });
+
+  it('stats 未取得（失敗・形の違う応答）ではダッシュボードを出さない', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(200, { unexpected: true }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { container } = render(<KnowledgeOverlay />);
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(container.querySelector('.knowledge__dashboard')).toBeNull();
+    // 既存のルール一覧はそのまま表示される
+    expect(screen.getByText('あなたのルール')).toBeInTheDocument();
+  });
+});
+
+describe('topAppliedRules / formatStatsCost（#25 単体）', () => {
+  it('applied 0 回は除外し、降順（同数は id 昇順）で最大3件', () => {
+    const rules = useBoardStore.getState().rules.map((r) =>
+      r.id === 'K-03' ? { ...r, applied: 0 } : r,
+    );
+    expect(topAppliedRules(rules).map((r) => r.id)).toEqual(['K-02', 'K-04', 'K-01']);
+    expect(topAppliedRules(rules, 2).map((r) => r.id)).toEqual(['K-02', 'K-04']);
+    expect(topAppliedRules([])).toEqual([]);
+  });
+
+  it('コストは $1 未満 4桁 / 以上 2桁（TraceSection と同規約）', () => {
+    expect(formatStatsCost(0)).toBe('$0.0000');
+    expect(formatStatsCost(0.0231)).toBe('$0.0231');
+    expect(formatStatsCost(12.5)).toBe('$12.50');
   });
 });

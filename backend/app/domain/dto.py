@@ -8,6 +8,8 @@ from pydantic import Field
 from app.domain.models import (
     AgentRole,
     AiJob,
+    AiJobKind,
+    AiJobStatus,
     Artifact,
     Author,
     AutonomyLevel,
@@ -144,6 +146,53 @@ class JobRunRequest(CamelModel):
     """POST /internal/jobs/run（Cloud Tasks / local ランナーのターゲット）。"""
 
     job_id: str
+
+
+# ---- 意思決定トレース（#25） ----
+class TraceEntry(CamelModel):
+    """成果物1版ぶんのトレース行（GET /tasks/:id/trace）。
+
+    「どのジョブが・どのルール（K-xx）を前提に・何トークン/$いくらで生成したか」。
+    人の編集版（job_id なし）は kind 以下がすべて null/空 = FE は「あなたが編集」と表示。
+    """
+
+    version: int
+    job_id: str | None = None
+    kind: AiJobKind | None = None  # None = 人の編集版
+    status: AiJobStatus | None = None
+    applied_rule_ids: list[str] = []  # ルールの human_id（例 ["K-01","K-03"]。注入順）
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cost_usd: float | None = None
+    created_at: str  # この版の保存時刻
+    finished_at: str | None = None  # 生成ジョブの完了時刻
+
+
+class TraceResponse(CamelModel):
+    """GET /tasks/:id/trace（version 昇順。末尾が最新版）。"""
+
+    task_id: str
+    entries: list[TraceEntry]
+
+
+# ---- 学習ダッシュボード統計（#25） ----
+class RuleApplicationPoint(CamelModel):
+    """ルール適用回数の日別1点（学習曲線スパークラインの素材）。"""
+
+    date: str  # YYYY-MM-DD
+    count: int
+
+
+class StatsResponse(CamelModel):
+    """GET /api/stats（ワークスペース横断の学習・コスト集計）。"""
+
+    ai_done_count: int  # succeeded した execute ジョブ数（AIが完遂した実作業）
+    total_cost_usd: float  # ai_jobs.cost_usd の累計（実算定 #25）
+    total_tokens: int  # input+output トークンの累計
+    rule_applications: list[RuleApplicationPoint]  # 直近14日・古い順（欠損日は 0）
+    rule_applications_total: int  # 適用回数の累計（rules.applied の合計）
+    reject_count: int  # 人の差し戻し回数（【差し戻し理由】コメント数）
+    rules_count: int  # ナレッジのルール総数
 
 
 # ---- ルール（ナレッジ） ----

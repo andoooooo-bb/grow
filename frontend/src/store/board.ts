@@ -16,6 +16,8 @@ import {
   getComments,
   getJobs,
   getLearnProposals,
+  getStats,
+  getTrace,
   patchTask,
   promoteRule as promoteRuleRequest,
   rejectTask as rejectTaskRequest,
@@ -27,9 +29,11 @@ import type {
   ArtifactDeltaEvent,
   BoardResponse,
   LaneDto,
+  StatsResponse,
   SubtaskProposal,
   SubtaskProposalEvent,
   TaskPatch,
+  TraceEntry,
 } from '../types/api.ts';
 import type {
   AgentRole,
@@ -98,6 +102,13 @@ export interface BoardState {
   activity: ActivityEntry[];
   // #19: taskId -> AIジョブ履歴（createdAt 昇順）。ドロワーのリレー・タイムラインが読む
   jobs: Record<string, AiJob[]>;
+  // #25: taskId -> 意思決定トレース（version 昇順）。ドロワーの TraceSection が読む
+  trace: Record<string, TraceEntry[]>;
+  // #25: 学習・コストダッシュボード集計（GET /api/stats）。KnowledgeOverlay が読む
+  stats: StatsResponse | null;
+  // #25: taskId -> 表示中の成果物 version（null/未設定 = 最新に追従）。
+  // ArtifactSection の版セレクタと TraceSection のハイライトが共有する
+  artifactVersion: Record<string, number | null>;
 }
 
 export interface BoardActions {
@@ -185,6 +196,14 @@ export interface BoardActions {
   loadJobs: (taskId: string) => Promise<void>;
   /** ライブフィードへ1行積む（新しい順・上限 ACTIVITY_LIMIT。同一 id は重複排除） */
   pushActivity: (entry: ActivityEntry) => void;
+
+  // ---- 意思決定トレース・学習ダッシュボード（#25） ----
+  /** GET /tasks/:id/trace で版ごとのトレースを読み込む（TraceSection が呼ぶ）。失敗は非表示のまま */
+  loadTrace: (taskId: string) => Promise<void>;
+  /** GET /api/stats で学習・コスト集計を読み込む（KnowledgeOverlay が呼ぶ）。失敗は前回値のまま */
+  loadStats: () => Promise<void>;
+  /** 表示する成果物の版を選ぶ（null = 最新に追従）。ArtifactSection と TraceSection が連動する */
+  selectArtifactVersion: (taskId: string, version: number | null) => void;
 
   // ---- 壁打ち → 分解（#12 / §1.6 / §5.3） ----
   /**
@@ -286,6 +305,9 @@ export function createInitialBoardState(): BoardState {
     justApplied: {},
     activity: [],
     jobs: {},
+    trace: {},
+    stats: null,
+    artifactVersion: {},
   };
 }
 
@@ -683,6 +705,33 @@ export const useBoardStore = create<BoardStore>()((set, get) => ({
       if (s.activity.some((e) => e.id === entry.id)) return {};
       return { activity: [entry, ...s.activity].slice(0, ACTIVITY_LIMIT) };
     }),
+
+  // ---- 意思決定トレース・学習ダッシュボード（#25） ----
+  loadTrace: async (taskId) => {
+    try {
+      const res = await getTrace(taskId);
+      if (!Array.isArray(res.entries)) return; // 予期しない応答は無視（セクション非表示のまま）
+      set((s) => ({ trace: { ...s.trace, [taskId]: res.entries } }));
+    } catch {
+      // 取得失敗はセクション非表示のまま（§5.5: トレースなしと同じ扱い。文言は出さない）
+    }
+  },
+  loadStats: async () => {
+    try {
+      const res = await getStats();
+      // 予期しない応答（形の違う JSON）はタイルに出さない（前回値を保持）
+      if (typeof res?.aiDoneCount !== 'number' || !Array.isArray(res?.ruleApplications)) {
+        return;
+      }
+      set({ stats: res });
+    } catch {
+      // 取得失敗は前回値のまま（初回なら null = タイル非表示）
+    }
+  },
+  selectArtifactVersion: (taskId, version) =>
+    set((s) => ({
+      artifactVersion: { ...s.artifactVersion, [taskId]: version },
+    })),
 
   // ---- 壁打ち → 分解（#12 / §1.6 / §5.3） ----
   startChat: async (taskId) => {

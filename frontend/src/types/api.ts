@@ -4,6 +4,8 @@
 import type {
   AgentRole,
   AiJob,
+  AiJobKind,
+  AiJobStatus,
   Artifact,
   Author,
   AutonomyLevel,
@@ -135,6 +137,47 @@ export interface RejectRequest {
 export interface JobsResponse {
   taskId: string;
   jobs: AiJob[];
+}
+
+// ---- 意思決定トレース（#25） ----
+// 成果物1版ぶんのトレース行（GET /tasks/:id/trace）。
+// 「どのジョブが・どのルール（K-xx）を前提に・何トークン/$いくらで生成したか」。
+// 人の編集版（jobId なし）は kind 以下がすべて null/空 = 「あなたが編集」と表示する
+export interface TraceEntry {
+  version: number;
+  jobId?: string | null;
+  kind?: AiJobKind | null; // null = 人の編集版
+  status?: AiJobStatus | null;
+  appliedRuleIds: string[]; // ルールの human_id（例 ["K-01","K-03"]。注入順）
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  costUsd?: number | null;
+  createdAt: string; // この版の保存時刻
+  finishedAt?: string | null; // 生成ジョブの完了時刻
+}
+
+// GET /tasks/:id/trace（version 昇順。末尾が最新版）
+export interface TraceResponse {
+  taskId: string;
+  entries: TraceEntry[];
+}
+
+// ---- 学習ダッシュボード統計（#25） ----
+// ルール適用回数の日別1点（学習曲線スパークラインの素材）
+export interface RuleApplicationPoint {
+  date: string; // YYYY-MM-DD
+  count: number;
+}
+
+// GET /api/stats（ワークスペース横断の学習・コスト集計）
+export interface StatsResponse {
+  aiDoneCount: number; // succeeded した execute ジョブ数（AIが完遂した実作業）
+  totalCostUsd: number; // ai_jobs.cost_usd の累計（実算定 #25）
+  totalTokens: number; // input+output トークンの累計
+  ruleApplications: RuleApplicationPoint[]; // 直近14日・古い順（欠損日は 0）
+  ruleApplicationsTotal: number; // 適用回数の累計（rules.applied の合計）
+  rejectCount: number; // 人の差し戻し回数（【差し戻し理由】コメント数）
+  rulesCount: number; // ナレッジのルール総数
 }
 
 // ---- ルール（ナレッジ） ----

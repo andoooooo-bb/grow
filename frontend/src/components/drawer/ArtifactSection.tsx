@@ -25,8 +25,10 @@ export function ArtifactSection({ task, canAssignAi }: ArtifactSectionProps) {
   const assignAi = useBoardStore((s) => s.assignAi);
   const saveArtifact = useBoardStore((s) => s.saveArtifact);
   const openKnowledge = useBoardStore((s) => s.openKnowledge);
-  // 選択中の版（null = 最新）。最新をデフォルト表示し、新版が届いたら自動で追従する
-  const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
+  // 選択中の版（null = 最新）。最新をデフォルト表示し、新版が届いたら自動で追従する。
+  // #25: TraceSection のハイライト・行クリックと連動するためストアで共有する
+  const selectedVersion = useBoardStore((s) => s.artifactVersion[task.id] ?? null);
+  const selectArtifactVersion = useBoardStore((s) => s.selectArtifactVersion);
   // 編集中の Markdown 生文字列（null = プレビュー表示）
   const [editText, setEditText] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -57,7 +59,7 @@ export function ArtifactSection({ task, canAssignAi }: ArtifactSectionProps) {
     if (ok) {
       // 保存で新版が積まれる（POST 応答/SSE で store 反映）→ 選択版を最新へ戻す
       setEditText(null);
-      setSelectedVersion(null);
+      selectArtifactVersion(task.id, null);
     }
   };
 
@@ -82,7 +84,7 @@ export function ArtifactSection({ task, canAssignAi }: ArtifactSectionProps) {
               className="artifact__version"
               aria-label="版を選択"
               value={current.version}
-              onChange={(e) => setSelectedVersion(Number(e.target.value))}
+              onChange={(e) => selectArtifactVersion(task.id, Number(e.target.value))}
             >
               {artifacts.map((a) => (
                 <option key={a.id} value={a.version}>

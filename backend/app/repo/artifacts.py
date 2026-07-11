@@ -11,6 +11,7 @@ from uuid import UUID
 
 import asyncpg
 
+from app.domain.dto import TraceEntry
 from app.domain.models import Artifact
 
 
@@ -104,5 +105,59 @@ async def list_artifacts(
     )
     return [
         _row_to_artifact(row, task_row["human_id"], row["applied_rule_human_ids"])
+        for row in rows
+    ]
+
+
+async def list_trace_entries(
+    conn: asyncpg.Connection, task_row: asyncpg.Record
+) -> list[TraceEntry]:
+    """意思決定トレース（#25）: 版ごとに生成ジョブの由来情報を結合して返す。
+
+    artifacts × ai_jobs（kind/status/tokens/cost_usd/finished_at）×
+    rules（applied_rule_ids → human_id 解決。注入順を保持）。version 昇順。
+    人の編集版（job_id なし）はジョブ由来のフィールドがすべて null/空になる。
+    """
+    rows = await conn.fetch(
+        """
+        select a.version,
+               a.job_id,
+               a.created_at,
+               j.kind,
+               j.status,
+               j.input_tokens,
+               j.output_tokens,
+               j.cost_usd,
+               j.finished_at,
+               coalesce(
+                 (
+                   select array_agg(r.human_id order by u.ord)
+                   from unnest(j.applied_rule_ids) with ordinality as u(rule_id, ord)
+                   join rules r on r.id = u.rule_id
+                 ),
+                 '{}'
+               ) as applied_rule_human_ids
+        from artifacts a
+        left join ai_jobs j on j.id = a.job_id
+        where a.task_id = $1
+        order by a.version
+        """,
+        task_row["id"],
+    )
+    return [
+        TraceEntry(
+            version=row["version"],
+            job_id=str(row["job_id"]) if row["job_id"] is not None else None,
+            kind=row["kind"],
+            status=row["status"],
+            applied_rule_ids=list(row["applied_rule_human_ids"]),
+            input_tokens=row["input_tokens"],
+            output_tokens=row["output_tokens"],
+            cost_usd=float(row["cost_usd"]) if row["cost_usd"] is not None else None,
+            created_at=row["created_at"].isoformat(),
+            finished_at=(
+                row["finished_at"].isoformat() if row["finished_at"] is not None else None
+            ),
+        )
         for row in rows
     ]

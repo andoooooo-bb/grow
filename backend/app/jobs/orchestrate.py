@@ -42,6 +42,7 @@ import asyncpg
 
 from app.ai import get_provider
 from app.ai.provider import NextActionResult, TokenUsage
+from app.costs import calc_cost_usd
 from app.db import get_pool
 from app.domain.dto import CommentCreate, SubtaskProposal, SubtaskProposalEvent
 from app.domain.models import (
@@ -697,13 +698,21 @@ async def _stop_with_comment(job_id: str, task_row: asyncpg.Record, text: str) -
 async def _mark_succeeded(
     conn: asyncpg.Connection, job_id: str, *usages: TokenUsage
 ) -> None:
-    """orchestrate ジョブを成功確定する（判断＋生成のトークン合算。mock は cost 0.0）。"""
+    """orchestrate ジョブを成功確定する（判断＋生成のトークン合算＋コスト実算定 #25）。
+
+    合算 usage に Flash 単価（orchestrate）を適用する。合算に含まれる生成呼び出し
+    （chat_reply / propose_subtasks）も Flash 系のため単価は一致する。
+    """
+    total = TokenUsage(
+        input_tokens=sum(u.input_tokens for u in usages),
+        output_tokens=sum(u.output_tokens for u in usages),
+    )
     await ai_jobs_repo.mark_succeeded(
         conn,
         job_id,
-        input_tokens=sum(u.input_tokens for u in usages),
-        output_tokens=sum(u.output_tokens for u in usages),
-        cost_usd=0.0,
+        input_tokens=total.input_tokens,
+        output_tokens=total.output_tokens,
+        cost_usd=calc_cost_usd(AiJobKind.ORCHESTRATE, total),
     )
 
 

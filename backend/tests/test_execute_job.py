@@ -130,9 +130,12 @@ async def test_execute_job_success(
         for job in jobs:
             assert job["input_tokens"] > 0
             assert job["output_tokens"] > 0
-            assert float(job["cost_usd"]) == 0.0
+            # #25 コスト実算定: mock でも単価テーブル（execute=Pro / review=Flash）で $ が動く
+            assert float(job["cost_usd"]) >= 0.0
             assert job["finished_at"] is not None
             assert job["error"] is None
+        # execute（Pro 単価・数百トークン規模）は numeric(10,4) への丸め後も必ず正になる
+        assert all(float(j["cost_usd"]) > 0.0 for j in jobs if j["kind"] == "execute")
         # review は execute と同じ適用ルールを審査基準として引き継ぐ
         assert jobs[1]["applied_rule_ids"] == jobs[0]["applied_rule_ids"]
         assert len(jobs[0]["applied_rule_ids"]) == 4  # K-01/K-02/K-03/K-04
