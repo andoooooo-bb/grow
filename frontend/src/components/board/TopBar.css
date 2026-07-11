@@ -113,6 +113,11 @@
   font-family: inherit;
 }
 
+/* #20: ルール適用の瞬間の「◈ ナレッジ」明滅（one-shot 紫グロウ） */
+.topbar__knowledge--flash {
+  animation: var(--anim-ruleflash);
+}
+
 /* アバター: 28×28, radius 8px, 背景#2c3340, 文字#aeb6c2 11px/600 "YK" */
 .topbar__avatar {
   width: 28px;

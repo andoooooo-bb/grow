@@ -43,3 +43,22 @@ describe('TopBar（§3.1）', () => {
     ).toBeInTheDocument();
   });
 });
+
+// ---- #20: ルール適用フラッシュ ----
+
+describe('TopBar: 「◈ ナレッジ」の適用フラッシュ（#20）', () => {
+  it('justApplied があるとき明滅クラスを付与する', () => {
+    useBoardStore.setState({ justApplied: { 'K-01': 1234 } });
+    render(<TopBar />);
+    expect(screen.getByRole('button', { name: '◈ ナレッジ 5' })).toHaveClass(
+      'topbar__knowledge--flash',
+    );
+  });
+
+  it('適用が無ければ明滅クラスは付かない', () => {
+    render(<TopBar />);
+    expect(screen.getByRole('button', { name: '◈ ナレッジ 5' })).not.toHaveClass(
+      'topbar__knowledge--flash',
+    );
+  });
+});

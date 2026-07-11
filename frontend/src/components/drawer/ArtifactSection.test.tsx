@@ -168,3 +168,88 @@ describe('ArtifactSection（§3.3.2 c-2）', () => {
     expect(screen.getByLabelText('版を選択')).toHaveValue('3');
   });
 });
+
+// ---- #20: 差分リプレイ＋由来ルールチップ ----
+
+describe('ArtifactSection: 差分リプレイ（#20）', () => {
+  const D1 = makeArtifact({
+    id: 'a-1',
+    version: 1,
+    contentMd: '# レポート\n価格は文中に記載',
+  });
+  const D2 = makeArtifact({
+    id: 'a-2',
+    version: 2,
+    contentMd: '# レポート\n| プラン | 価格 |\n出典: https://example.com',
+    appliedRuleIds: ['K-01', 'K-03'],
+  });
+
+  it('単版では「差分」トグルを出さない', () => {
+    renderSection([D1]);
+    expect(screen.queryByRole('button', { name: '差分' })).toBeNull();
+  });
+
+  it('「差分」トグルで直前版との行diff（追加=緑add/削除=赤del）を表示する', () => {
+    const { container } = renderSection([D1, D2]);
+    fireEvent.click(screen.getByRole('button', { name: '差分' }));
+
+    expect(screen.getByText('v1 → v2 の差分')).toBeInTheDocument();
+    const addTexts = [
+      ...container.querySelectorAll('.artifact__diff-line--add .artifact__diff-text'),
+    ].map((el) => el.textContent);
+    expect(addTexts).toEqual(['| プラン | 価格 |', '出典: https://example.com']);
+    const delTexts = [
+      ...container.querySelectorAll('.artifact__diff-line--del .artifact__diff-text'),
+    ].map((el) => el.textContent);
+    expect(delTexts).toEqual(['価格は文中に記載']);
+    expect(container.querySelectorAll('.artifact__diff-line--equal')).toHaveLength(1);
+    // 差分表示中は Markdown プレビューを出さない
+    expect(container.querySelector('.artifact__preview')).toBeNull();
+  });
+
+  it('トグル再クリックでプレビューへ戻る', () => {
+    const { container } = renderSection([D1, D2]);
+    const toggle = screen.getByRole('button', { name: '差分' });
+    fireEvent.click(toggle);
+    expect(container.querySelector('.artifact__diff')).not.toBeNull();
+    fireEvent.click(toggle);
+    expect(container.querySelector('.artifact__diff')).toBeNull();
+    expect(container.querySelector('.artifact__preview')).not.toBeNull();
+  });
+
+  it('直前版が無い v1 へ切り替えるとトグルが消えプレビューに戻る', () => {
+    const { container } = renderSection([D1, D2]);
+    fireEvent.click(screen.getByRole('button', { name: '差分' }));
+    fireEvent.change(screen.getByLabelText('版を選択'), { target: { value: '1' } });
+
+    expect(screen.queryByRole('button', { name: '差分' })).toBeNull();
+    expect(container.querySelector('.artifact__diff')).toBeNull();
+    expect(screen.getByText('価格は文中に記載')).toBeInTheDocument();
+  });
+
+  it('appliedRuleIds のチップ（ルール文ツールチップ付き）を表示し、クリックでナレッジを開く', () => {
+    renderSection([D1, D2]); // 最新 v2 の由来ルール = K-01, K-03
+    expect(screen.getByText('◈ 適用ルール')).toBeInTheDocument();
+
+    const chip = screen.getByRole('button', { name: 'K-01' });
+    // rules ストア（boardFixture）から text を引いてツールチップにする
+    expect(chip).toHaveAttribute(
+      'title',
+      'レポートは結論→根拠の順で書き、冒頭に3行サマリーを置く',
+    );
+    expect(screen.getByRole('button', { name: 'K-03' })).toBeInTheDocument();
+
+    fireEvent.click(chip);
+    expect(useBoardStore.getState().showKnowledge).toBe(true);
+  });
+
+  it('由来ルールが無い版（人の編集など）ではチップ行を出さない', () => {
+    renderSection([D2, makeArtifact({ id: 'a-3', version: 3, contentMd: '# 手直し' })]);
+    expect(screen.queryByText('◈ 適用ルール')).toBeNull();
+
+    // 過去版（AI生成 v2）へ戻すとその版の由来ルールが出る
+    fireEvent.change(screen.getByLabelText('版を選択'), { target: { value: '2' } });
+    expect(screen.getByText('◈ 適用ルール')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'K-03' })).toBeInTheDocument();
+  });
+});

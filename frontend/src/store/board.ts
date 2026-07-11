@@ -65,6 +65,10 @@ export interface BoardState {
   assigning: Record<string, boolean>; // taskId -> assign-ai 送信中（ボタン無効化, #10）
   confirming: Record<string, boolean>; // taskId -> breakdown/confirm 送信中（ボタン無効化, #12）
   learning: Record<string, boolean>; // taskId -> 「✧ 学ぶ」実行中（ボタン無効化, #14）
+  // #20: ルール適用フラッシュ演出 — rule.updated（applied++）受信直後の ruleId -> 時刻(ms)。
+  // 消費側（AppliedRules/KnowledgeOverlay/TopBar）は値を key に使い、変わるたび
+  // one-shot CSS アニメを再マウントで再生する（数秒で自然に減衰。クリア不要）。
+  justApplied: Record<string, number>;
 }
 
 export interface BoardActions {
@@ -181,7 +185,11 @@ export interface BoardActions {
    * isNew はクライアント表示状態なので、既存のローカル値を保持する（SSE で NEW が消えない）。
    */
   applyRuleCreated: (rule: Rule) => void;
-  /** rule.updated: 昇格・applied++ の同期（#14）。upsert 方針は applyRuleCreated と同じ */
+  /**
+   * rule.updated: 昇格・applied++ の同期（#14）。upsert 方針は applyRuleCreated と同じ。
+   * #20: applied が増えた（=いま注入された）ときのみ justApplied[ruleId] に時刻を記録し、
+   * 適用ルール行・ナレッジカード・「◈ ナレッジ」のフラッシュ演出を発火する。
+   */
   applyRuleUpdated: (rule: Rule) => void;
 }
 
@@ -209,6 +217,7 @@ export function createInitialBoardState(): BoardState {
     assigning: {},
     confirming: {},
     learning: {},
+    justApplied: {},
   };
 }
 
@@ -726,7 +735,18 @@ export const useBoardStore = create<BoardStore>()((set, get) => ({
       proposal: { ...s.proposal, [event.taskId]: event.subtasks },
     })),
   applyRuleCreated: (rule) => set((s) => ({ rules: upsertRule(s.rules, rule) })),
-  applyRuleUpdated: (rule) => set((s) => ({ rules: upsertRule(s.rules, rule) })),
+  applyRuleUpdated: (rule) =>
+    set((s) => {
+      // #20: applied が増えた（=「AIにまかせる」で注入された）瞬間だけフラッシュを発火
+      const prev = s.rules.find((r) => r.id === rule.id);
+      const flashed = prev !== undefined && rule.applied > prev.applied;
+      return {
+        rules: upsertRule(s.rules, rule),
+        ...(flashed
+          ? { justApplied: { ...s.justApplied, [rule.id]: Date.now() } }
+          : {}),
+      };
+    }),
 }));
 
 // ---- 派生値（§5.1: render のたび計算, 保存しない） ----

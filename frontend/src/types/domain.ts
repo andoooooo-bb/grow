@@ -134,6 +134,9 @@ export interface Artifact {
   id: string;
   taskId: string;
   jobId?: string | null; // どの execute ジョブが生成したか
+  // 生成ジョブが注入したルールの human_id（例 ["K-01","K-03"]。#20 差分リプレイの由来表示）。
+  // 人の編集版（jobId なし）は空配列。BE は常に返すが、旧レスポンス互換のため optional。
+  appliedRuleIds?: string[];
   version: number; // 1,2,3… タスク内で単調増加。最大版が「最新」
   contentMd: string; // Markdown 本文（3行サマリー→本文→比較表→出典URL）
   createdAt: string;

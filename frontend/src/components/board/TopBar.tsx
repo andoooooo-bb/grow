@@ -14,6 +14,10 @@ export function TopBar() {
   const aiCount = useBoardStore((s) => deriveAiCount(s.cards));
   const ruleCount = useBoardStore((s) => deriveRuleCount(s.rules));
   const openKnowledge = useBoardStore((s) => s.openKnowledge);
+  // #20: ルール適用の瞬間に「◈ ナレッジ」を明滅させる（最新の適用時刻で one-shot 再生）
+  const justApplied = useBoardStore((s) => s.justApplied);
+  const stamps = Object.values(justApplied);
+  const flashStamp = stamps.length > 0 ? Math.max(...stamps) : undefined;
 
   return (
     <header className="topbar">
@@ -34,7 +38,15 @@ export function TopBar() {
           <span className="topbar__pill-dot topbar__pill-dot--ai" aria-hidden="true" />
           AI稼働 {aiCount}
         </span>
-        <button type="button" className="topbar__knowledge" onClick={openKnowledge}>
+        <button
+          // #20: 適用時刻を key に使い、適用のたび明滅アニメを再マウントで再生する
+          key={flashStamp ?? 'static'}
+          type="button"
+          className={`topbar__knowledge${
+            flashStamp === undefined ? '' : ' topbar__knowledge--flash'
+          }`}
+          onClick={openKnowledge}
+        >
           ◈ ナレッジ {ruleCount}
         </button>
         <span className="topbar__avatar">YK</span>

@@ -1145,3 +1145,64 @@ describe('learn / rule actions（#14）', () => {
     expect(s.rules.find((r) => r.id === 'K-01')?.scope).toBe('personal');
   });
 });
+
+// ---- ルール適用フラッシュ（#20: justApplied） ----
+
+describe('justApplied（#20 ルール適用フラッシュ）', () => {
+  beforeEach(() => {
+    useBoardStore.setState({ ...createInitialBoardState(), ...boardFixture() });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function fixtureRule(id: string): Rule {
+    const rule = useBoardStore.getState().rules.find((r) => r.id === id);
+    if (!rule) throw new Error(`fixture にルールが無い: ${id}`);
+    return rule;
+  }
+
+  it('初期状態は空', () => {
+    expect(createInitialBoardState().justApplied).toEqual({});
+  });
+
+  it('applyRuleUpdated: applied が増えたルールに適用時刻を記録する', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(1111);
+    const k01 = fixtureRule('K-01'); // applied 6
+    useBoardStore.getState().applyRuleUpdated({ ...k01, applied: k01.applied + 1 });
+
+    const s = useBoardStore.getState();
+    expect(s.justApplied['K-01']).toBe(1111);
+    // rules 側も upsert で同期される（applied++）
+    expect(s.rules.find((r) => r.id === 'K-01')?.applied).toBe(7);
+  });
+
+  it('applied が増えない rule.updated（昇格など）ではフラッシュしない', () => {
+    const k01 = fixtureRule('K-01');
+    useBoardStore.getState().applyRuleUpdated({ ...k01, scope: 'team' });
+    expect(useBoardStore.getState().justApplied).toEqual({});
+    expect(useBoardStore.getState().rules.find((r) => r.id === 'K-01')?.scope).toBe(
+      'team',
+    );
+  });
+
+  it('ストアに無いルールの rule.updated は upsert のみ（フラッシュなし）', () => {
+    const unknown: Rule = { ...fixtureRule('K-01'), id: 'K-99', applied: 1 };
+    useBoardStore.getState().applyRuleUpdated(unknown);
+    const s = useBoardStore.getState();
+    expect(s.justApplied).toEqual({});
+    expect(s.rules.find((r) => r.id === 'K-99')).toBeDefined();
+  });
+
+  it('再適用のたびに時刻が更新される（アニメ再生のトリガ）', () => {
+    const spy = vi.spyOn(Date, 'now').mockReturnValue(1111);
+    const k01 = fixtureRule('K-01');
+    useBoardStore.getState().applyRuleUpdated({ ...k01, applied: k01.applied + 1 });
+    expect(useBoardStore.getState().justApplied['K-01']).toBe(1111);
+
+    spy.mockReturnValue(2222);
+    useBoardStore.getState().applyRuleUpdated({ ...k01, applied: k01.applied + 2 });
+    expect(useBoardStore.getState().justApplied['K-01']).toBe(2222);
+  });
+});

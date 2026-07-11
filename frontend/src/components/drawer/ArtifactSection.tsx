@@ -2,10 +2,13 @@
 // 見出し「成果物（レポート）」＋版セレクタ（複数版時のみ・最新デフォルト）＋
 // Markdown プレビュー＋「編集」（textarea → 新版保存）＋「再生成」（assignAi 再実行）。
 // リッチエディタは持たない（§00 #12: Markdown を textarea で直接編集）。
+// #20: 「差分」トグルで直前版との行 diff（追加=緑 / 削除=赤・取り消し線）を表示し、
+// 由来ルール（appliedRuleIds）のチップで『使うほど賢くなる』を差分で証明する。
 
 import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { diffLines } from '../../lib/diff.ts';
 import { useBoardStore } from '../../store/board.ts';
 import type { Task } from '../../types/domain.ts';
 import './ArtifactSection.css';
@@ -18,13 +21,17 @@ interface ArtifactSectionProps {
 
 export function ArtifactSection({ task, canAssignAi }: ArtifactSectionProps) {
   const artifacts = useBoardStore((s) => s.artifacts[task.id]);
+  const rules = useBoardStore((s) => s.rules);
   const assignAi = useBoardStore((s) => s.assignAi);
   const saveArtifact = useBoardStore((s) => s.saveArtifact);
+  const openKnowledge = useBoardStore((s) => s.openKnowledge);
   // 選択中の版（null = 最新）。最新をデフォルト表示し、新版が届いたら自動で追従する
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
   // 編集中の Markdown 生文字列（null = プレビュー表示）
   const [editText, setEditText] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // #20: 差分表示トグル（選択版と直前版の行 diff。直前版が無い v1 ではプレビューに戻る）
+  const [showDiff, setShowDiff] = useState(false);
 
   // §3.3.2 c-2: 成果物がある時のみ表示（§5.5 準拠で空状態文言も出さない）
   if (artifacts === undefined || artifacts.length === 0) return null;
@@ -36,6 +43,11 @@ export function ArtifactSection({ task, canAssignAi }: ArtifactSectionProps) {
       ? undefined
       : artifacts.find((a) => a.version === selectedVersion);
   const current = selected ?? latest;
+  // #20: 直前版（配列順 = version 昇順）。v1 には無い → 差分トグル非表示
+  const currentIndex = artifacts.indexOf(current);
+  const previous = currentIndex > 0 ? artifacts[currentIndex - 1] : undefined;
+  // #20: この版の由来ルール（生成ジョブが注入した human_id。人の編集版は空）
+  const appliedRuleIds = current.appliedRuleIds ?? [];
 
   const save = async () => {
     if (editText === null) return;
@@ -53,27 +65,80 @@ export function ArtifactSection({ task, canAssignAi }: ArtifactSectionProps) {
     <section className="artifact">
       <div className="artifact__heading">
         <span className="artifact__title">成果物（レポート）</span>
-        {artifacts.length > 1 && (
-          <select
-            className="artifact__version"
-            aria-label="版を選択"
-            value={current.version}
-            onChange={(e) => setSelectedVersion(Number(e.target.value))}
-          >
-            {artifacts.map((a) => (
-              <option key={a.id} value={a.version}>
-                v{a.version}
-              </option>
-            ))}
-          </select>
-        )}
+        <div className="artifact__controls">
+          {/* #20: 差分トグル（直前版がある版のみ。編集中は隠す） */}
+          {editText === null && previous !== undefined && (
+            <button
+              type="button"
+              className={`artifact__diff-toggle${showDiff ? ' artifact__diff-toggle--on' : ''}`}
+              aria-pressed={showDiff}
+              onClick={() => setShowDiff((v) => !v)}
+            >
+              差分
+            </button>
+          )}
+          {artifacts.length > 1 && (
+            <select
+              className="artifact__version"
+              aria-label="版を選択"
+              value={current.version}
+              onChange={(e) => setSelectedVersion(Number(e.target.value))}
+            >
+              {artifacts.map((a) => (
+                <option key={a.id} value={a.version}>
+                  v{a.version}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
       </div>
+      {/* #20: 由来ルールチップ（例 K-01）。ツールチップでルール文、クリックでナレッジへ */}
+      {editText === null && appliedRuleIds.length > 0 && (
+        <div className="artifact__rules" aria-label="この版に適用されたルール">
+          <span className="artifact__rules-label">◈ 適用ルール</span>
+          {appliedRuleIds.map((ruleId) => (
+            <button
+              key={ruleId}
+              type="button"
+              className="artifact__rule-chip"
+              title={rules.find((r) => r.id === ruleId)?.text}
+              onClick={openKnowledge}
+            >
+              {ruleId}
+            </button>
+          ))}
+        </div>
+      )}
       {editText === null ? (
         <>
-          <div className="artifact__preview">
-            {/* GFM（比較表・§00 #1 レポートの核）を有効化 */}
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{current.contentMd}</ReactMarkdown>
-          </div>
+          {showDiff && previous !== undefined ? (
+            // #20: Before/After 差分リプレイ（追加=緑背景 / 削除=赤背景・取り消し線）
+            <div className="artifact__diff">
+              <div className="artifact__diff-head">
+                v{previous.version} → v{current.version} の差分
+              </div>
+              <div className="artifact__diff-body">
+                {diffLines(previous.contentMd, current.contentMd).map((line, i) => (
+                  <div
+                    // 差分行は再並べ替えされない静的リストなので index キーで安全
+                    key={i}
+                    className={`artifact__diff-line artifact__diff-line--${line.op}`}
+                  >
+                    <span className="artifact__diff-sign" aria-hidden="true">
+                      {line.op === 'add' ? '+' : line.op === 'del' ? '−' : ' '}
+                    </span>
+                    <span className="artifact__diff-text">{line.text}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="artifact__preview">
+              {/* GFM（比較表・§00 #1 レポートの核）を有効化 */}
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{current.contentMd}</ReactMarkdown>
+            </div>
+          )}
           <div className="artifact__actions">
             <button
               type="button"

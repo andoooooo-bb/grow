@@ -226,3 +226,15 @@
   color: var(--color-text-weakest);
   line-height: 1.5;
 }
+
+/* #20: 適用の瞬間のルールカードフラッシュ（one-shot 紫グロウ） */
+.knowledge__rule--flash {
+  animation: var(--anim-ruleflash);
+}
+
+/* #20: 「適用 N回」のカウントアップ強調（拡大 → 等倍。one-shot） */
+.knowledge__applied--bump {
+  display: inline-block;
+  transform-origin: left center;
+  animation: var(--anim-countbump);
+}

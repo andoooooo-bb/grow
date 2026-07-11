@@ -66,3 +66,9 @@
   color: var(--color-text-mid);
   line-height: 1.5;
 }
+
+/* #20: 「AIにまかせる」で注入された瞬間の行フラッシュ（one-shot 紫グロウ） */
+.applied-rules__row--flash {
+  border-radius: var(--radius-badge);
+  animation: var(--anim-ruleflash);
+}

@@ -195,3 +195,41 @@ body {
   border-radius: 6px;
   border: 3px solid var(--color-app-bg);
 }
+
+/* ============================================================
+ * #20 追加: ルール適用フラッシュ / 適用回数カウントアップ
+ * 「AIにまかせる」の瞬間に注入ルールが光る one-shot 演出。
+ * 背景色は要素固有の値を壊さないよう box-shadow の紫グロウで表現する。
+ * ============================================================ */
+:root {
+  --anim-ruleflash: ruleflash 2.4s ease-out; /* 適用ルール行・ナレッジカード・◈ ナレッジ */
+  --anim-countbump: countbump 0.9s ease-out; /* 「適用 N回」のカウントアップ強調 */
+}
+
+@keyframes ruleflash {
+  0% {
+    box-shadow:
+      0 0 0 3px rgba(93, 78, 176, 0.45),
+      0 0 14px rgba(93, 78, 176, 0.35);
+  }
+  60% {
+    box-shadow:
+      0 0 0 2px rgba(93, 78, 176, 0.2),
+      0 0 8px rgba(93, 78, 176, 0.15);
+  }
+  100% {
+    box-shadow:
+      0 0 0 0 rgba(93, 78, 176, 0),
+      0 0 0 rgba(93, 78, 176, 0);
+  }
+}
+
+@keyframes countbump {
+  0% {
+    transform: scale(1.4);
+    color: var(--color-teal-dark);
+  }
+  100% {
+    transform: scale(1);
+  }
+}

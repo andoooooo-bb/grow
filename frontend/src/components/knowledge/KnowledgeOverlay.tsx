@@ -21,11 +21,17 @@ interface RuleCardProps {
   rule: Rule;
   /** personal セクションのみ「チームへ昇格 ↑」を出す（team は無し — §3.4） */
   onPromote?: (ruleId: string) => void;
+  /** #20: 適用直後（rule.updated applied++）の時刻。カードのフラッシュ＋適用回数バンプ */
+  flashStamp?: number;
 }
 
-function RuleCard({ rule, onPromote }: RuleCardProps) {
+function RuleCard({ rule, onPromote, flashStamp }: RuleCardProps) {
   return (
-    <div className={`knowledge__rule knowledge__rule--${rule.scope}`}>
+    <div
+      className={`knowledge__rule knowledge__rule--${rule.scope}${
+        flashStamp === undefined ? '' : ' knowledge__rule--flash'
+      }`}
+    >
       <div className="knowledge__rule-main">
         <span
           className={`knowledge__conf knowledge__conf--${rule.confidence}`}
@@ -36,7 +42,15 @@ function RuleCard({ rule, onPromote }: RuleCardProps) {
       </div>
       <div className="knowledge__rule-meta">
         <span className="knowledge__source">出典: {rule.source}</span>
-        <span className="knowledge__applied">適用 {rule.applied}回</span>
+        {/* #20: 適用の瞬間にカウントアップを強調（時刻 key で one-shot アニメ再生） */}
+        <span
+          key={flashStamp}
+          className={`knowledge__applied${
+            flashStamp === undefined ? '' : ' knowledge__applied--bump'
+          }`}
+        >
+          適用 {rule.applied}回
+        </span>
         {onPromote !== undefined && (
           <button
             type="button"
@@ -56,6 +70,8 @@ export function KnowledgeOverlay() {
   const rules = useBoardStore((s) => s.rules);
   const closeKnowledge = useBoardStore((s) => s.closeKnowledge);
   const promoteRule = useBoardStore((s) => s.promoteRule);
+  // #20: 適用直後の ruleId -> 時刻（カードのフラッシュ＋「適用 N回」バンプ演出）
+  const justApplied = useBoardStore((s) => s.justApplied);
 
   if (!showKnowledge) return null;
 
@@ -100,9 +116,15 @@ export function KnowledgeOverlay() {
               ) : (
                 personal.map((rule) => (
                   <RuleCard
-                    key={rule.id}
+                    // #20: 適用時刻を key に含め、再適用のたびフラッシュを再生する
+                    key={
+                      justApplied[rule.id] === undefined
+                        ? rule.id
+                        : `${rule.id}-${justApplied[rule.id]}`
+                    }
                     rule={rule}
                     onPromote={(id) => void promoteRule(id)}
+                    flashStamp={justApplied[rule.id]}
                   />
                 ))
               )}
@@ -122,7 +144,17 @@ export function KnowledgeOverlay() {
               {team.length === 0 ? (
                 <div className="knowledge__empty">{KNOWLEDGE_EMPTY_TEXT}</div>
               ) : (
-                team.map((rule) => <RuleCard key={rule.id} rule={rule} />)
+                team.map((rule) => (
+                  <RuleCard
+                    key={
+                      justApplied[rule.id] === undefined
+                        ? rule.id
+                        : `${rule.id}-${justApplied[rule.id]}`
+                    }
+                    rule={rule}
+                    flashStamp={justApplied[rule.id]}
+                  />
+                ))
               )}
             </div>
           </section>

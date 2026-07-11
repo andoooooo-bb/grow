@@ -148,3 +148,26 @@ describe('KnowledgeOverlay: チームへ昇格（§1.8 promoteRule）', () => {
     expect(container.querySelectorAll('.knowledge__rule--team')).toHaveLength(3);
   });
 });
+
+// ---- #20: 適用フラッシュ＋適用回数カウントアップ ----
+
+describe('KnowledgeOverlay: 適用フラッシュ（#20）', () => {
+  it('justApplied のカードに flash、「適用 N回」に bump クラスを付与する', () => {
+    useBoardStore.setState({ justApplied: { 'K-01': 1234 } });
+    const { container } = render(<KnowledgeOverlay />);
+
+    const flashed = [...container.querySelectorAll('.knowledge__rule--flash')];
+    expect(flashed).toHaveLength(1);
+    expect(flashed[0].textContent).toContain(rule('K-01').text);
+
+    const bumped = container.querySelectorAll('.knowledge__applied--bump');
+    expect(bumped).toHaveLength(1);
+    expect(bumped[0].textContent).toBe('適用 6回'); // K-01 の適用回数
+  });
+
+  it('justApplied が空ならフラッシュ/バンプは付かない', () => {
+    const { container } = render(<KnowledgeOverlay />);
+    expect(container.querySelector('.knowledge__rule--flash')).toBeNull();
+    expect(container.querySelector('.knowledge__applied--bump')).toBeNull();
+  });
+});

@@ -4,6 +4,7 @@
 // DragOverlay 側がポータルで最前面に描画する（#8 の clipping バグ修正）。
 
 import { forwardRef, type HTMLAttributes } from 'react';
+import { relevantRules } from '../../lib/retrieval.ts';
 import type { Task } from '../../types/domain.ts';
 import { STATUS_META } from '../../types/domain.ts';
 import { useBoardStore } from '../../store/board.ts';
@@ -31,6 +32,9 @@ export const CardView = forwardRef<HTMLDivElement, CardViewProps>(
     const childDoneCount = useBoardStore(
       (s) => (task.childIds ?? []).filter((id) => s.cards[id]?.status === 'done').length,
     );
+    // #20: このカードに適用予定のルール数（◈N ミニチップ。0件は非表示）。
+    // FE ミラー retrieval（BE と同一ロジック）で決定的に算出でき API 不要
+    const ruleCount = useBoardStore((s) => relevantRules(s.rules, task).length);
 
     const meta = STATUS_META[task.status];
     // 左色バー（§3.2）: done は owner に関わらず緑。未完了は owner で色分け。
@@ -46,9 +50,17 @@ export const CardView = forwardRef<HTMLDivElement, CardViewProps>(
             <Avatar owner={meta.owner} />
             <span className="card__id">{task.id}</span>
           </div>
-          <span className="card__comments">
-            <span className="card__comments-dot" aria-hidden="true" />
-            {task.commentCount}
+          <span className="card__meta-right">
+            {/* #20: 適用予定ルール数の ◈N ミニチップ（0件は非表示） */}
+            {ruleCount > 0 && (
+              <span className="card__rules" title={`適用予定のルール ${ruleCount}件`}>
+                ◈{ruleCount}
+              </span>
+            )}
+            <span className="card__comments">
+              <span className="card__comments-dot" aria-hidden="true" />
+              {task.commentCount}
+            </span>
           </span>
         </div>
 

@@ -62,3 +62,25 @@ describe('AppliedRules（§3.3.2b）', () => {
     expect(screen.queryByText(/まだルールがありません/)).toBeNull();
   });
 });
+
+// ---- #20: ルール適用フラッシュ ----
+
+describe('AppliedRules: 適用フラッシュ（#20）', () => {
+  it('justApplied のルール行にだけ flash クラスを付与する', () => {
+    useBoardStore.setState({ justApplied: { 'K-02': 1234 } });
+    const { container } = render(<AppliedRules task={task('T-104')} />);
+
+    const flashed = [...container.querySelectorAll('.applied-rules__row--flash')];
+    expect(flashed).toHaveLength(1);
+    expect(flashed[0].querySelector('.applied-rules__text')?.textContent).toBe(
+      '絵文字は使わない。文体は簡潔・断定調に統一する', // K-02
+    );
+    // 4行中フラッシュは1行のみ
+    expect(container.querySelectorAll('.applied-rules__row')).toHaveLength(4);
+  });
+
+  it('justApplied が空なら flash クラスは付かない', () => {
+    const { container } = render(<AppliedRules task={task('T-104')} />);
+    expect(container.querySelector('.applied-rules__row--flash')).toBeNull();
+  });
+});

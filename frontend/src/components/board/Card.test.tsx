@@ -148,3 +148,25 @@ describe('Card: クリックで select(id)（§5.3）', () => {
     expect(useBoardStore.getState().panelMode).toBe('detail');
   });
 });
+
+// ---- #20: 適用予定ルール数の ◈N ミニチップ ----
+
+describe('Card: ◈N ルールチップ（#20）', () => {
+  it('retrieval 該当ルール数を ◈N で表示する（T-104 → ◈4）', () => {
+    render(<Card task={getTask('T-104')} />);
+    const chip = screen.getByText('◈4');
+    expect(chip).toHaveClass('card__rules');
+    expect(chip).toHaveAttribute('title', '適用予定のルール 4件');
+  });
+
+  it('ラベル違いでは件数が変わる（T-109（個人）→ 全体ルール2件で ◈2）', () => {
+    render(<Card task={getTask('T-109')} />);
+    expect(screen.getByText('◈2')).toBeInTheDocument();
+  });
+
+  it('該当 0 件ならチップを出さない', () => {
+    useBoardStore.setState({ rules: [] });
+    const { container } = render(<Card task={getTask('T-104')} />);
+    expect(container.querySelector('.card__rules')).toBeNull();
+  });
+});
