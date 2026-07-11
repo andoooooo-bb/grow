@@ -39,6 +39,10 @@ gcloud builds submit "$ROOT_DIR" \
 echo "== [2/3] Cloud Run デプロイ: ${SERVICE_NAME} (${REGION})"
 # GCP_LOCATION は Cloud Tasks キューと Vertex AI の両方で使われる（app/config.py）ため、
 # デプロイリージョンと同一にする。モデル可用性の問題は infra/README.md のトラブルシュート参照。
+# --max-instances 1 は必須（#24）: SSE のイベントバス（backend/app/events.py）はプロセス内
+# シングルトンのため、複数インスタンスだと SSE 購読とジョブ実行（Cloud Tasks の push 先）が
+# 別インスタンスに分かれ、artifact.delta / task.updated が購読者に届かない。
+# スケールさせる場合は Redis pub/sub 等のプロセス外バスに置き換えてから増やすこと。
 gcloud run deploy "$SERVICE_NAME" \
   --project "$PROJECT_ID" \
   --region "$REGION" \
@@ -46,7 +50,7 @@ gcloud run deploy "$SERVICE_NAME" \
   --service-account "$SA_EMAIL" \
   --allow-unauthenticated \
   --min-instances 0 \
-  --max-instances 2 \
+  --max-instances 1 \
   --memory "$MEMORY" \
   --cpu 1 \
   --timeout 600 \

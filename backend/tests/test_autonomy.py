@@ -25,8 +25,6 @@ COST_CAP_COMMENT_1USD = (
 
 @pytest.fixture
 def zero_delays(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(execute_mod, "PROGRESS_DELAY_SEC", 0.0)
-    monkeypatch.setattr(execute_mod, "COMPLETE_DELAY_SEC", 0.0)
     monkeypatch.setattr(execute_mod, "RETRY_BACKOFF_SEC", 0.0)
 
 
@@ -50,15 +48,19 @@ def event_queue():
 
 
 class _RecordingProvider(MockProvider):
-    """execute に渡された policy / plan_only を記録するモック（伝搬検証用）。"""
+    """execute に渡された policy / plan_only / on_delta を記録するモック（伝搬検証用）。"""
 
     def __init__(self) -> None:
         self.calls: list[dict] = []
 
-    async def execute(self, task, rules, comments, *, policy=None, plan_only=False):
-        self.calls.append({"policy": policy, "plan_only": plan_only})
+    async def execute(
+        self, task, rules, comments, *, policy=None, plan_only=False, on_delta=None
+    ):
+        self.calls.append(
+            {"policy": policy, "plan_only": plan_only, "streams": on_delta is not None}
+        )
         return await super().execute(
-            task, rules, comments, policy=policy, plan_only=plan_only
+            task, rules, comments, policy=policy, plan_only=plan_only, on_delta=on_delta
         )
 
 
@@ -139,13 +141,14 @@ async def test_execute_l0_hands_off_plan_to_you_todo(
         comments = await conn.fetch(
             "select * from comments where task_id = $1 order by created_at", task["id"]
         )
-        assert len(comments) == 3  # 着手 → 中間 → プランハンドオフ
-        assert comments[2]["text"].startswith(
+        # 着手 → プランハンドオフ（#24: L0 は実況しない = 中間コメントも出さない）
+        assert len(comments) == 2
+        assert comments[1]["text"].startswith(
             "実行プランを作成しました。オートノミーL0（計画のみ）のため、実行せずここで停止します。"
         )
-        assert "実行プラン" in comments[2]["text"]
-        assert "## 進め方（案）" in comments[2]["text"]
-        assert comments[2]["agent_role"] == "executor"
+        assert "実行プラン" in comments[1]["text"]
+        assert "## 進め方（案）" in comments[1]["text"]
+        assert comments[1]["agent_role"] == "executor"
 
         job = await conn.fetchrow("select * from ai_jobs where id = $1::uuid", job_id)
         assert job["status"] == "succeeded"
@@ -154,9 +157,8 @@ async def test_execute_l0_hands_off_plan_to_you_todo(
         await conn.close()
 
     events = drain_events(event_queue)
+    # #24: L0 は実況しない（artifact.delta・中間コメント・進捗配信なし）
     assert [e["type"] for e in events] == [
-        "comment.created",  # 中間
-        "task.updated",  # progress 45
         "comment.created",  # プランハンドオフ
         "task.updated",  # you_todo
     ]
@@ -265,7 +267,12 @@ async def test_execute_passes_policy_and_plan_only_to_provider(
     await api_client.post("/internal/jobs/run", json={"jobId": res.json()["jobId"]})
 
     assert provider.calls == [
-        {"policy": {"allowWebSearch": False, "costCapUsd": 3.0}, "plan_only": True}
+        # L0 は実況しない（#24: on_delta を渡さない）
+        {
+            "policy": {"allowWebSearch": False, "costCapUsd": 3.0},
+            "plan_only": True,
+            "streams": False,
+        }
     ]
 
 

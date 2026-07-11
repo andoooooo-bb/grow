@@ -53,8 +53,6 @@ COST_CAP_COMMENT_1USD = (
 
 @pytest.fixture
 def zero_delays(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(execute_mod, "PROGRESS_DELAY_SEC", 0.0)
-    monkeypatch.setattr(execute_mod, "COMPLETE_DELAY_SEC", 0.0)
     monkeypatch.setattr(execute_mod, "RETRY_BACKOFF_SEC", 0.0)
 
 

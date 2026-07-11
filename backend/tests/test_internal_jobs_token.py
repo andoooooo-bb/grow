@@ -27,14 +27,12 @@ def token_env(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.fixture
 def job_test_setup(monkeypatch: pytest.MonkeyPatch) -> None:
-    """assign-ai の enqueue をフェイク化し演出ディレイを 0 にする（test_execute_job と同方針）。"""
+    """assign-ai の enqueue をフェイク化しリトライ間隔を 0 にする（test_execute_job と同方針）。"""
 
     async def _fake_enqueue(job_id: str) -> None:
         return None
 
     monkeypatch.setattr(jobs_queue, "enqueue_job", _fake_enqueue)
-    monkeypatch.setattr(execute_mod, "PROGRESS_DELAY_SEC", 0.0)
-    monkeypatch.setattr(execute_mod, "COMPLETE_DELAY_SEC", 0.0)
     monkeypatch.setattr(execute_mod, "RETRY_BACKOFF_SEC", 0.0)
 
 

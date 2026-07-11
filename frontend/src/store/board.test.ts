@@ -722,6 +722,84 @@ describe('artifacts（#10）', () => {
   });
 });
 
+// ---- ライブ実況（#24: artifact.delta → liveDraft） ----
+
+describe('applyArtifactDelta / liveDraft（#24）', () => {
+  beforeEach(() => {
+    useBoardStore.setState({ ...createInitialBoardState(), ...boardFixture() });
+  });
+
+  it('増分を seq 順に連結して liveDraft[taskId] に保持する', () => {
+    const { applyArtifactDelta } = useBoardStore.getState();
+    applyArtifactDelta({ taskId: 'T-098', delta: '# 調査', seq: 1 });
+    applyArtifactDelta({ taskId: 'T-098', delta: 'レポート\n\n', seq: 2 });
+    applyArtifactDelta({ taskId: 'T-098', delta: '本文', seq: 3 });
+    expect(useBoardStore.getState().liveDraft['T-098']).toBe('# 調査レポート\n\n本文');
+  });
+
+  it('seq=1 は新しいストリームの開始としてリセットする（リトライ・revise 再実行）', () => {
+    const { applyArtifactDelta } = useBoardStore.getState();
+    applyArtifactDelta({ taskId: 'T-098', delta: '前のストリームの残骸', seq: 1 });
+    applyArtifactDelta({ taskId: 'T-098', delta: '# v2 ', seq: 1 }); // 再スタート
+    applyArtifactDelta({ taskId: 'T-098', delta: '本文', seq: 2 });
+    expect(useBoardStore.getState().liveDraft['T-098']).toBe('# v2 本文');
+  });
+
+  it('タスクごとに独立して連結する', () => {
+    const { applyArtifactDelta } = useBoardStore.getState();
+    applyArtifactDelta({ taskId: 'T-098', delta: 'A', seq: 1 });
+    applyArtifactDelta({ taskId: 'T-112', delta: 'B', seq: 1 });
+    const s = useBoardStore.getState();
+    expect(s.liveDraft['T-098']).toBe('A');
+    expect(s.liveDraft['T-112']).toBe('B');
+  });
+
+  it('artifact.created（確定版）の適用で liveDraft をクリアする', () => {
+    const { applyArtifactDelta, applyArtifactCreated } = useBoardStore.getState();
+    applyArtifactDelta({ taskId: 'T-098', delta: '# 生成途中', seq: 1 });
+
+    applyArtifactCreated(makeArtifact({ id: 'a-9', version: 1, taskId: 'T-098' }));
+
+    const s = useBoardStore.getState();
+    expect(s.liveDraft['T-098']).toBeUndefined();
+    expect(s.artifacts['T-098']).toHaveLength(1);
+  });
+
+  it('artifact.created の id 重複（再送）でも liveDraft はクリアされる', () => {
+    const { applyArtifactDelta, applyArtifactCreated } = useBoardStore.getState();
+    const v1 = makeArtifact({ id: 'a-9', version: 1, taskId: 'T-098' });
+    applyArtifactCreated(v1);
+    applyArtifactDelta({ taskId: 'T-098', delta: '遅延して届いた増分', seq: 5 });
+
+    applyArtifactCreated(v1); // 重複再送（版は増えない）
+
+    const s = useBoardStore.getState();
+    expect(s.artifacts['T-098']).toHaveLength(1);
+    expect(s.liveDraft['T-098']).toBeUndefined();
+  });
+
+  it('applyTaskUpdated で ai_work を離れたら liveDraft を破棄する（失敗ハンドオフ）', () => {
+    const { applyArtifactDelta, applyTaskUpdated } = useBoardStore.getState();
+    applyArtifactDelta({ taskId: 'T-098', delta: '# 途中まで', seq: 1 });
+
+    // 失敗ハンドオフ相当: ai_work → you_todo（artifact.created は届かない）
+    const task = useBoardStore.getState().cards['T-098'];
+    applyTaskUpdated({ ...task, status: 'you_todo', progress: undefined });
+
+    expect(useBoardStore.getState().liveDraft['T-098']).toBeUndefined();
+  });
+
+  it('ai_work のままの task.updated（進捗更新）では liveDraft を保持する', () => {
+    const { applyArtifactDelta, applyTaskUpdated } = useBoardStore.getState();
+    applyArtifactDelta({ taskId: 'T-098', delta: '# 途中まで', seq: 1 });
+
+    const task = useBoardStore.getState().cards['T-098'];
+    applyTaskUpdated({ ...task, progress: 35 }); // 実況中の間引き進捗
+
+    expect(useBoardStore.getState().liveDraft['T-098']).toBe('# 途中まで');
+  });
+});
+
 // ---- 壁打ち → 分解（#12: §1.6 / §5.3 startChat・sendChat・confirmBreakdown） ----
 
 function makeChatMessage(

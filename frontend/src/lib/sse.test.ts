@@ -10,6 +10,7 @@ import type {
 } from '../types/domain.ts';
 import {
   ARTIFACT_CREATED,
+  ARTIFACT_DELTA,
   CHAT_MESSAGE_CREATED,
   COMMENT_CREATED,
   EVENTS_URL,
@@ -171,6 +172,27 @@ describe('connectEvents（§5.4 / #7）', () => {
     const v2: Artifact = { ...v1, id: 'a-2', version: 2, contentMd: '# 改訂版' };
     lastSource().emit(ARTIFACT_CREATED, v2);
     expect(useBoardStore.getState().artifacts['T-104']).toEqual([v1, v2]);
+  });
+
+  it('artifact.delta で増分を liveDraft へ連結し、artifact.created でクリアする（#24）', () => {
+    connectEvents();
+
+    lastSource().emit(ARTIFACT_DELTA, { taskId: 'T-104', delta: '# 調査', seq: 1 });
+    lastSource().emit(ARTIFACT_DELTA, { taskId: 'T-104', delta: 'レポート', seq: 2 });
+    expect(useBoardStore.getState().liveDraft['T-104']).toBe('# 調査レポート');
+
+    // 確定版（artifact.created）が届いたらライブ実況の下書きは差し替えられて消える
+    const v1: Artifact = {
+      id: 'a-1',
+      taskId: 'T-104',
+      version: 1,
+      contentMd: '# 調査レポート（確定版）',
+      createdAt: AT,
+    };
+    lastSource().emit(ARTIFACT_CREATED, v1);
+    const s = useBoardStore.getState();
+    expect(s.liveDraft['T-104']).toBeUndefined();
+    expect(s.artifacts['T-104']).toEqual([v1]);
   });
 
   it('chat.message.created で開始済みの壁打ちへ追記する（#12。id で重複排除）', () => {

@@ -24,6 +24,7 @@ import {
 } from '../lib/api.ts';
 import { canTransition } from '../lib/stateMachine.ts';
 import type {
+  ArtifactDeltaEvent,
   BoardResponse,
   LaneDto,
   SubtaskProposal,
@@ -80,6 +81,9 @@ export interface BoardState {
   proposal: Record<string, SubtaskProposal[]>;
   learn: Record<string, RuleProposal[]>; // 蒸留候補（taskId -> ）
   artifacts: Record<string, Artifact[]>; // taskId -> 成果物の版（§00 #2。version 昇順・末尾が最新）
+  // #24 ライブ実況: taskId -> 生成途中の成果物テキスト（artifact.delta の連結）。
+  // artifact.created（確定版）受信でクリアし、以降は artifacts が真実になる
+  liveDraft: Record<string, string>;
   drafts: Record<string, string>; // コンポーザ入力
   chatDrafts: Record<string, string>; // 壁打ちコンポーザ入力（detail のコンポーザとは別持ち, #12）
   assigning: Record<string, boolean>; // taskId -> assign-ai 送信中（ボタン無効化, #10）
@@ -228,6 +232,12 @@ export interface BoardActions {
   /** artifact.created: version 昇順を保って追記（POST 応答との重複は id で排除） */
   applyArtifactCreated: (artifact: Artifact) => void;
   /**
+   * artifact.delta: ライブ実況の増分を liveDraft[taskId] へ連結する（#24）。
+   * seq=1 は新しいストリームの開始なのでリセットして始める（リトライ・再実行対応）。
+   * 確定版は artifact.created が届き、applyArtifactCreated が liveDraft をクリアする。
+   */
+  applyArtifactDelta: (event: ArtifactDeltaEvent) => void;
+  /**
    * chat.message.created: 開始済みの壁打ちへ追記（#12）。人メッセージ送信時も配信される
    * ため、id 重複排除＋自分の楽観的追加（tmp-）との差し替えを行う。
    */
@@ -266,6 +276,7 @@ export function createInitialBoardState(): BoardState {
     proposal: {},
     learn: {},
     artifacts: {},
+    liveDraft: {},
     drafts: {},
     chatDrafts: {},
     assigning: {},
@@ -854,7 +865,14 @@ export const useBoardStore = create<BoardStore>()((set, get) => ({
           cardIds: [...without.slice(0, position), task.id, ...without.slice(position)],
         };
       });
-      return { cards: { ...s.cards, [task.id]: task }, lanes };
+      // #24: ai_work を離れたらライブ実況の下書きを破棄する
+      // （成功時は artifact.created が先にクリア済み。失敗ハンドオフ等の残骸対策）
+      let liveDraft = s.liveDraft;
+      if (task.status !== 'ai_work' && liveDraft[task.id] !== undefined) {
+        liveDraft = { ...liveDraft };
+        delete liveDraft[task.id];
+      }
+      return { cards: { ...s.cards, [task.id]: task }, lanes, liveDraft };
     });
     // #19 ライブフィード: ステータスが変わった瞬間だけ積む（差し替えのみでは積まない）
     if (prev !== undefined && prev.status !== task.status) {
@@ -900,12 +918,18 @@ export const useBoardStore = create<BoardStore>()((set, get) => ({
   },
   applyArtifactCreated: (artifact) => {
     set((s) => {
+      // #24: 確定版が届いたのでライブ実況の下書きはクリアする（差し替え）
+      let liveDraft = s.liveDraft;
+      if (liveDraft[artifact.taskId] !== undefined) {
+        liveDraft = { ...liveDraft };
+        delete liveDraft[artifact.taskId];
+      }
       const list = s.artifacts[artifact.taskId] ?? [];
       // id 重複排除（自分の POST 応答と SSE の二重適用を防ぐ）
-      if (list.some((a) => a.id === artifact.id)) return {};
+      if (list.some((a) => a.id === artifact.id)) return { liveDraft };
       // version 昇順（末尾が最新）を維持して追記
       const next = [...list, artifact].sort((a, b) => a.version - b.version);
-      return { artifacts: { ...s.artifacts, [artifact.taskId]: next } };
+      return { artifacts: { ...s.artifacts, [artifact.taskId]: next }, liveDraft };
     });
     // #19 ライブフィード: 版の作成を積む（AI生成=実行AI名義 / 人の編集版=名義なし）
     get().pushActivity({
@@ -917,6 +941,15 @@ export const useBoardStore = create<BoardStore>()((set, get) => ({
       at: Date.now(),
     });
   },
+  applyArtifactDelta: ({ taskId, delta, seq }) =>
+    set((s) => ({
+      liveDraft: {
+        ...s.liveDraft,
+        // seq=1 は新しいストリームの開始（execute のリトライ・revise 再実行）:
+        // 前のストリームの残骸を捨てて連結し直す
+        [taskId]: seq <= 1 ? delta : (s.liveDraft[taskId] ?? '') + delta,
+      },
+    })),
   applyChatMessageCreated: (message) =>
     set((s) => {
       const list = s.chat[message.taskId];

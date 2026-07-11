@@ -5,7 +5,7 @@
 //   data: {"type": <type>, "payload": <DTO の camelCase>}
 
 import { useBoardStore } from '../store/board.ts';
-import type { SubtaskProposalEvent } from '../types/api.ts';
+import type { ArtifactDeltaEvent, SubtaskProposalEvent } from '../types/api.ts';
 import type { Artifact, ChatMessage, Comment, Rule, Task } from '../types/domain.ts';
 
 export const EVENTS_URL = '/api/events';
@@ -14,6 +14,7 @@ export const EVENTS_URL = '/api/events';
 export const TASK_UPDATED = 'task.updated';
 export const COMMENT_CREATED = 'comment.created';
 export const ARTIFACT_CREATED = 'artifact.created'; // #10（backend/app/repo/artifacts.py）
+export const ARTIFACT_DELTA = 'artifact.delta'; // #24（ライブ実況。サーバ非永続）
 export const CHAT_MESSAGE_CREATED = 'chat.message.created'; // #11/#12（壁打ち）
 export const SUBTASK_PROPOSAL = 'subtask.proposal'; // #11/#12（分解候補。サーバ非永続）
 export const RULE_CREATED = 'rule.created'; // #13/#14（蒸留候補の採用）
@@ -29,6 +30,7 @@ interface SseEnvelope<T> {
  * - task.updated → applyTaskUpdated（レーン移動・commentCount 同期を含むカード差し替え）
  * - comment.created → applyCommentCreated（開いているドロワーのスレッドへ追記。id で重複排除）
  * - artifact.created → applyArtifactCreated（成果物の新版を version 昇順で追記。id で重複排除）
+ * - artifact.delta → applyArtifactDelta（#24 ライブ実況の増分を liveDraft へ連結）
  * - chat.message.created → applyChatMessageCreated（開始済みの壁打ちへ追記。id で重複排除）
  * - subtask.proposal → applySubtaskProposal（分解候補を proposal[taskId] へセット）
  * - rule.created / rule.updated → applyRuleCreated / applyRuleUpdated（id で upsert。
@@ -45,6 +47,7 @@ export function connectEvents(): () => void {
     applyTaskUpdated,
     applyCommentCreated,
     applyArtifactCreated,
+    applyArtifactDelta,
     applyChatMessageCreated,
     applySubtaskProposal,
     applyRuleCreated,
@@ -62,6 +65,10 @@ export function connectEvents(): () => void {
   source.addEventListener(ARTIFACT_CREATED, (e: MessageEvent) => {
     const { payload } = JSON.parse(e.data as string) as SseEnvelope<Artifact>;
     applyArtifactCreated(payload);
+  });
+  source.addEventListener(ARTIFACT_DELTA, (e: MessageEvent) => {
+    const { payload } = JSON.parse(e.data as string) as SseEnvelope<ArtifactDeltaEvent>;
+    applyArtifactDelta(payload);
   });
   source.addEventListener(CHAT_MESSAGE_CREATED, (e: MessageEvent) => {
     const { payload } = JSON.parse(e.data as string) as SseEnvelope<ChatMessage>;

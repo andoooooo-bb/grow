@@ -8,6 +8,7 @@ from app.ai.mock_provider import (
     CHAT_FOLLOWUP,
     GREETING_GENERIC,
     GREETING_T130,
+    STREAM_CHUNK_CHARS,
     MockProvider,
 )
 from app.ai.provider import TokenUsage
@@ -229,6 +230,55 @@ async def test_execute_plan_only_weaves_rule_texts(provider: MockProvider):
     result = await provider.execute(_task(), rules=rules, comments=[], plan_only=True)
     assert "## 適用ルール" in result.content_md
     assert "レポートは結論→根拠の順で書き、冒頭に3行サマリーを置く" in result.content_md
+
+
+# --- execute のライブ実況（#24: on_delta ストリーム模擬） ---
+
+
+async def test_execute_streams_deterministic_chunks_via_on_delta(provider: MockProvider):
+    """on_delta 指定時: 固定幅の増分が順に届き、連結が content_md と一致する（決定的）。"""
+    task = _task("T-104", "競合SaaS 5社の料金プランを調査", ["仕事", "調査"])
+    deltas: list[str] = []
+
+    async def on_delta(delta: str) -> None:
+        deltas.append(delta)
+
+    result = await provider.execute(task, rules=[], comments=[], on_delta=on_delta)
+    assert len(deltas) >= 2  # 数チャンクに分割されている
+    assert "".join(deltas) == result.content_md
+    # 分割点は固定幅（最終チャンク以外は STREAM_CHUNK_CHARS ちょうど）
+    assert all(len(d) == STREAM_CHUNK_CHARS for d in deltas[:-1])
+    assert 0 < len(deltas[-1]) <= STREAM_CHUNK_CHARS
+
+    # 同じ入力なら増分列も同一（決定的）
+    deltas2: list[str] = []
+
+    async def on_delta2(delta: str) -> None:
+        deltas2.append(delta)
+
+    again = await provider.execute(task, rules=[], comments=[], on_delta=on_delta2)
+    assert deltas2 == deltas
+    assert again.content_md == result.content_md
+
+
+async def test_execute_without_on_delta_does_not_stream(provider: MockProvider):
+    """on_delta 省略時は従来どおり（結果のみ返す）。"""
+    result = await provider.execute(_task(), rules=[], comments=[])
+    assert "## 比較表" in result.content_md
+
+
+async def test_execute_plan_only_does_not_stream(provider: MockProvider):
+    """plan_only=True（L0）は実況しない（on_delta を渡しても呼ばれない）。"""
+    deltas: list[str] = []
+
+    async def on_delta(delta: str) -> None:
+        deltas.append(delta)
+
+    result = await provider.execute(
+        _task(), rules=[], comments=[], plan_only=True, on_delta=on_delta
+    )
+    assert deltas == []
+    assert "実行プラン" in result.content_md
 
 
 # --- 決定性（同じ入力 → 同じ出力）と usage ---

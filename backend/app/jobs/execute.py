@@ -1,17 +1,21 @@
 """実作業（execute）ジョブ本体（§7.2 / §7.3 — この製品の主戦場）。
 
-進行はプロトタイプ assignAI の擬似タイミング（§4.4: 1600ms→中間 / 4200ms→完了）を踏襲:
+進行は本物のストリーミング実況（#24。擬似タイミングの張りぼては廃止）:
 
-    running → (1.6s) progress=45 ＋ 中間コメント → (2.6s) AiProvider.execute
+    running → AiProvider.execute(on_delta=…) が増分テキストを届けるたびに
+      - artifact.delta を SSE 配信（FE ドロワーのライブ描画）
+      - 最初の delta で中間コメントを1回投稿（§1.5 step5 / review.py の走査互換）
+      - 進捗 = 受信文字数ベースの推定を 5% 刻みで間引いて task.updated 配信
     → artifacts 新版保存 → ai_jobs succeeded（トークン/コスト記録 §00 #16）
     → review ジョブを enqueue（#23 セルフレビュー。タスクは ai_work のまま）
 
 you_review への遷移と完了コメントは review ジョブ（app/jobs/review.py）が
 approve 判定後に行う（#23）。revise なら本ジョブが再 enqueue され、修正版を作る。
 最終状態（you_review・完了コメント・L3 の done 連鎖）は #23 以前と同じ。
-L0（#21 計画のみ）は成果物を作らないためレビューを挟まず直接ハンドオフする。
+L0（#21 計画のみ）は成果物を作らないためレビューを挟まず直接ハンドオフする
+（実況もしない = on_delta を渡さない）。
 
-演出ディレイ・リトライ間隔はモジュール定数で注入可能（テストでは 0 秒に差し替える）。
+リトライ間隔はモジュール定数で注入可能（テストでは 0 秒に差し替える）。
 
 リトライ設計（§7.2）:
 - local ランナー: 本コルーチン内で最大 MAX_RETRIES 回リトライ（指数バックオフ）。
@@ -40,7 +44,13 @@ from app.domain.models import (
     TaskStatus,
 )
 from app.domain.state_machine import can_transition
-from app.events import ARTIFACT_CREATED, COMMENT_CREATED, TASK_UPDATED, publish_event
+from app.events import (
+    ARTIFACT_CREATED,
+    ARTIFACT_DELTA,
+    COMMENT_CREATED,
+    TASK_UPDATED,
+    publish_event,
+)
 from app.jobs import queue as jobs_queue
 from app.repo import ai_jobs as ai_jobs_repo
 from app.repo import comments as comments_repo
@@ -50,10 +60,10 @@ from app.repo.artifacts import create_artifact
 
 logger = logging.getLogger(__name__)
 
-# --- 演出ディレイ（§4.4 疑似タイミング。テストでは monkeypatch で 0 にする） ---
-PROGRESS_DELAY_SEC = 1.6  # 着手 → 中間進捗（プロト 1600ms）
-COMPLETE_DELAY_SEC = 2.6  # 中間進捗 → 完了（プロト 4200ms - 1600ms）
-INTERMEDIATE_PROGRESS = 45  # 中間進捗の値（プロト準拠）
+# --- ライブ実況（#24）: 進捗は受信文字数ベースの推定（擬似ディレイ・固定45%は廃止） ---
+PROGRESS_CHARS_PER_PERCENT = 40  # 受信40文字 ≒ 1%（実レポート2〜4千字で終盤に達する推定）
+PROGRESS_MAX = 95  # ストリーム中の進捗上限（最終確定は review 側のハンドオフ #23）
+PROGRESS_STEP_PERCENT = 5  # task.updated の間引き幅（5%刻みが変わったときのみ配信）
 
 # --- local ランナーのリトライ設定（§7.2） ---
 MAX_RETRIES = 2  # 初回 + 最大2回リトライ = 最大3試行
@@ -147,44 +157,27 @@ async def _execute_attempt(job_id: str, *, enqueue_next: bool = True) -> None:
         task_row = await _get_task_row(conn, job_row["task_id"])
         await ai_jobs_repo.mark_running(conn, job_id)
 
-    # 1) 演出ディレイ → 中間進捗 45% ＋ 中間コメント（§1.5 step5。再試行時はスキップ）
-    if not is_retry:
-        await asyncio.sleep(PROGRESS_DELAY_SEC)
-        async with pool.acquire() as conn:
-            async with conn.transaction():
-                row = await tasks_repo.get_task_row(conn, task_row["human_id"], for_update=True)
-                comment = await comments_repo.create_comment(
-                    conn,
-                    row,
-                    CommentCreate(
-                        author=Author.AI,
-                        text=PROGRESS_COMMENT,
-                        agent_role=AgentRole.EXECUTOR,  # 進捗は実行AIの名義（#19）
-                    ),
-                )
-                task = await tasks_repo.apply_patch(
-                    conn, row, {"progress": INTERMEDIATE_PROGRESS}
-                )
-        publish_event(COMMENT_CREATED, comment.model_dump(mode="json", by_alias=True))
-        publish_event(TASK_UPDATED, task.model_dump(mode="json", by_alias=True))
-
-    # 2) AiProvider.execute（retrieval 済みルール＋コメント履歴を注入, §7.3）
+    # 1) AiProvider.execute（retrieval 済みルール＋コメント履歴を注入, §7.3）
     #    #21: タスクのオートノミー（L0-L3）と行動範囲ポリシーを読み、provider へ渡す
+    #    #24: L1-L3 は on_delta でライブ実況する（artifact.delta / 中間コメント /
+    #    受信文字数ベースの進捗を間引き配信）。L0（計画のみ）は成果物を作らないため
+    #    実況しない。再試行（is_retry）では中間コメントを重複投稿しない。
     autonomy = AutonomyLevel(task_row["autonomy"])
     policy = tasks_repo.policy_from_row(task_row)
-    await asyncio.sleep(COMPLETE_DELAY_SEC)
     async with pool.acquire() as conn:
         rule_rows = await rules_repo.get_rules_by_uuids(conn, job_row["applied_rule_ids"])
         history = await comments_repo.list_comments(conn, task_row)
+    stream = _LiveStream(task_row, skip_comment=is_retry)
     result = await get_provider().execute(
         _task_prompt_dict(task_row),
         [rules_repo.rule_prompt_dict(row) for row in rule_rows],
         [{"who": c.author.value, "text": c.text} for c in history],
         policy=policy.model_dump(by_alias=True),
         plan_only=autonomy is AutonomyLevel.L0,
+        on_delta=None if autonomy is AutonomyLevel.L0 else stream.on_delta,
     )
 
-    # 3) 完了処理はオートノミーで分岐する（#21/#23）:
+    # 2) 完了処理はオートノミーで分岐する（#21/#23）:
     #    - L0: 成果物は作らず、実行プランをコメントで渡して you_todo へハンドオフ
     #    - L1-L3: 成果物を新版として保存し、タスクは ai_work のまま review ジョブへ
     #      リレーする（#23 セルフレビュー）。you_review への遷移・完了コメント・
@@ -224,6 +217,83 @@ async def _execute_attempt(job_id: str, *, enqueue_next: bool = True) -> None:
         await jobs_queue.enqueue_job(
             str(review_job_row["id"]), kind=AiJobKind.REVIEW.value
         )
+
+
+# ---- ライブ実況（#24）: delta 受信ごとの SSE 配信・進捗の間引き・中間コメント ----------
+
+
+class _LiveStream:
+    """AiProvider.execute の on_delta 受け口（1 execute 試行につき1インスタンス）。
+
+    - 受信増分をそのまま artifact.delta で SSE 配信する（seq は 1 始まりの連番。
+      再試行では新インスタンス = seq が 1 に戻り、FE はそこでライブ描画をリセットする）
+    - 最初の delta で中間コメント（PROGRESS_COMMENT）を1回だけ投稿する。
+      文言・名義（executor）は review.py の周回走査（_revise_cycle_count）が
+      読み飛ばす条件と対なので、変えるときは両方を更新すること。
+      skip_comment=True（再試行）では投稿しない（重複防止）。
+    - 進捗 = min(PROGRESS_MAX, 受信文字数 // PROGRESS_CHARS_PER_PERCENT)。
+      task.updated は PROGRESS_STEP_PERCENT 刻みが変わったときのみ配信する（間引き）。
+    """
+
+    def __init__(self, task_row: asyncpg.Record, *, skip_comment: bool) -> None:
+        self._task_row = task_row
+        self._chars = 0
+        self._seq = 0
+        self._commented = skip_comment
+        self._published_step = 0
+
+    async def on_delta(self, delta: str) -> None:
+        self._seq += 1
+        self._chars += len(delta)
+        publish_event(
+            ARTIFACT_DELTA,
+            {"taskId": self._task_row["human_id"], "delta": delta, "seq": self._seq},
+        )
+        progress = min(PROGRESS_MAX, self._chars // PROGRESS_CHARS_PER_PERCENT)
+        step = progress // PROGRESS_STEP_PERCENT
+        if not self._commented:
+            # 最初の delta: 中間コメント＋現在進捗を同時に反映（commentCount も同期）
+            self._commented = True
+            self._published_step = step
+            await _post_progress_comment(self._task_row, progress)
+            return
+        if step > self._published_step:
+            self._published_step = step
+            await _publish_progress(self._task_row, progress)
+
+
+async def _post_progress_comment(task_row: asyncpg.Record, progress: int) -> None:
+    """中間コメント（PROGRESS_COMMENT）と現在進捗を1トランザクションで反映・配信する。"""
+    pool = await get_pool()
+    async with pool.acquire() as conn, conn.transaction():
+        row = await tasks_repo.get_task_row(conn, task_row["human_id"], for_update=True)
+        comment = await comments_repo.create_comment(
+            conn,
+            row,
+            CommentCreate(
+                author=Author.AI,
+                text=PROGRESS_COMMENT,
+                agent_role=AgentRole.EXECUTOR,  # 進捗は実行AIの名義（#19）
+            ),
+        )
+        # §5.6 不変条件: progress を持てるのは ai_work のみ（並行操作で離脱していたら触らない）
+        fields: dict[str, Any] = (
+            {"progress": progress} if TaskStatus(row["status"]) is TaskStatus.AI_WORK else {}
+        )
+        task = await tasks_repo.apply_patch(conn, row, fields)
+    publish_event(COMMENT_CREATED, comment.model_dump(mode="json", by_alias=True))
+    publish_event(TASK_UPDATED, task.model_dump(mode="json", by_alias=True))
+
+
+async def _publish_progress(task_row: asyncpg.Record, progress: int) -> None:
+    """間引き済みの進捗を保存して task.updated を配信する（ai_work 以外では何もしない）。"""
+    pool = await get_pool()
+    async with pool.acquire() as conn, conn.transaction():
+        row = await tasks_repo.get_task_row(conn, task_row["human_id"], for_update=True)
+        if TaskStatus(row["status"]) is not TaskStatus.AI_WORK:
+            return  # 並行操作で ai_work を離れた（§5.6: progress は ai_work のみ）
+        task = await tasks_repo.apply_patch(conn, row, {"progress": progress})
+    publish_event(TASK_UPDATED, task.model_dump(mode="json", by_alias=True))
 
 
 # ---- L0: 実行プランを渡して人へハンドオフ（#21） -----------------------------------

@@ -1,0 +1,78 @@
+/* ライブ実況セクション（#24）: ArtifactSection と同じ区画スタイルで「生成中の成果物」を見せる */
+.live-draft {
+  flex: none;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--color-divider);
+}
+
+.live-draft__heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.live-draft__title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--color-text-secondary);
+  letter-spacing: 0.04em;
+}
+
+/* 「生成中…」バッジ: AI 稼働中を示すアクセント色の小さなピル */
+.live-draft__badge {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--color-accent, #7c5cff);
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  border-radius: var(--radius-badge);
+  padding: 2px 8px;
+  animation: live-draft-pulse 1.6s ease-in-out infinite;
+}
+
+/* プレビュー: 確定版（.artifact__preview）と同条件。生成に自動スクロールで追従する */
+.live-draft__preview {
+  background: var(--color-surface-soft);
+  border: 1px solid var(--color-divider-list);
+  border-radius: var(--radius-card);
+  padding: 12px 14px;
+  color: var(--color-text-body);
+  font-size: 12px;
+  line-height: 1.65;
+  max-height: 320px;
+  overflow-y: auto;
+  overflow-wrap: break-word;
+}
+
+.live-draft__preview > :first-child {
+  margin-top: 0;
+}
+
+.live-draft__preview table {
+  border-collapse: collapse;
+}
+
+.live-draft__preview th,
+.live-draft__preview td {
+  border: 1px solid var(--color-divider-list);
+  padding: 3px 8px;
+}
+
+/* 点滅カーソル「▍」: タイプライター演出の核 */
+.live-draft__cursor {
+  display: inline-block;
+  color: var(--color-accent, #7c5cff);
+  animation: live-draft-blink 1s steps(2, start) infinite;
+}
+
+@keyframes live-draft-blink {
+  to {
+    visibility: hidden;
+  }
+}
+
+@keyframes live-draft-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}

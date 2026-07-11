@@ -19,6 +19,10 @@ COMMENT_CREATED = "comment.created"  # payload: Comment DTO
 CHAT_MESSAGE_CREATED = "chat.message.created"  # payload: ChatMessage DTO（#11 壁打ち）
 SUBTASK_PROPOSAL = "subtask.proposal"  # payload: SubtaskProposalEvent DTO（#11 分解候補）
 ARTIFACT_CREATED = "artifact.created"  # payload: Artifact DTO（#9 成果物）
+# #24 ライブ実況: 実行AIの生成テキスト増分（非永続）。
+# payload: {"taskId": human_id, "delta": 増分テキスト, "seq": 1始まりの受信連番}
+# seq=1 は新しいストリームの開始（FE はここで liveDraft をリセットして連結し直す）
+ARTIFACT_DELTA = "artifact.delta"
 RULE_CREATED = "rule.created"  # payload: Rule DTO（#13 蒸留候補の採用）
 RULE_UPDATED = "rule.updated"  # payload: Rule DTO（#13 昇格・applied++ の同期）
 

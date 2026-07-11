@@ -1,7 +1,8 @@
 """GeminiProvider — Vertex AI Gemini 実装（Issue #15, §7.1/§7.3〜§7.5）。
 
 - SDK は google-genai（`google.genai.Client(vertexai=True, ...)`）。呼び出しは
-  `client.aio.models.generate_content`（async）のみ。
+  `client.aio.models.generate_content`（async）と、execute の on_delta 指定時のみ
+  `client.aio.models.generate_content_stream`（#24 ライブ実況）。
 - execute（§7.3）: 適用ルールを system に注入し、Grounding with Google Search
   （読み取りのみ, §00 #3）で情報収集して Markdown レポートを生成する。
   grounding metadata の出典 URL をレポート末尾に「## 出典」として付加する。
@@ -19,6 +20,8 @@
 応答が期待形でない場合（function_call 欠落・空テキスト等）は GeminiResponseError を
 送出し、ジョブ層のリトライ → 最終失敗ハンドオフ（§7.2）に乗せる。
 """
+
+from collections.abc import Awaitable, Callable
 
 from google import genai
 from google.genai import types
@@ -664,6 +667,42 @@ class GeminiProvider(AiProvider):
             model=model, contents=contents, config=config
         )
 
+    async def _generate_stream(
+        self,
+        *,
+        model: str,
+        contents: list[types.Content],
+        config: types.GenerateContentConfig,
+        on_delta: Callable[[str], Awaitable[None]],
+    ) -> tuple[str, list[tuple[str, str | None]], TokenUsage]:
+        """ストリーミング生成（#24）: 増分テキストを on_delta へ渡しつつ全文を集める。
+
+        - チャンクの text は「増分」（累積ではない）。空チャンクは配信しない。
+        - grounding metadata は各チャンクから重複なし（uri 単位）で収集する。
+        - usage は usage_metadata を載せたチャンク（通常は最終チャンク）の累計値。
+        戻り値は (全文, 出典リスト, usage)。
+        """
+        client = self._get_client()
+        parts: list[str] = []
+        sources: list[tuple[str, str | None]] = []
+        seen: set[str] = set()
+        usage = TokenUsage(input_tokens=0, output_tokens=0)
+        stream = await client.aio.models.generate_content_stream(
+            model=model, contents=contents, config=config
+        )
+        async for chunk in stream:
+            text = chunk.text
+            if text:
+                parts.append(text)
+                await on_delta(text)
+            for source in _grounding_sources(chunk):
+                if source[0] not in seen:
+                    seen.add(source[0])
+                    sources.append(source)
+            if chunk.usage_metadata is not None:
+                usage = _usage_from(chunk)
+        return "".join(parts), sources, usage
+
     async def execute(
         self,
         task: dict,
@@ -672,11 +711,14 @@ class GeminiProvider(AiProvider):
         *,
         policy: dict | None = None,
         plan_only: bool = False,
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> ExecuteResult:
         """実作業（§7.3）: グラウンディング付きで Markdown レポートを生成する。
 
         #21: policy.allowWebSearch=False なら Google Search ツールを付けず、
         既知情報のみで作成させる。plan_only=True（L0）は実行プランだけを生成する。
+        #24: on_delta 指定時（plan_only を除く）は generate_content_stream で
+        増分テキストをライブ配信しながら生成する（FC 系メソッドは非ストリームのまま）。
         """
         settings = get_settings()
         allow_web_search = bool((policy or {}).get("allowWebSearch", True))
@@ -689,19 +731,34 @@ class GeminiProvider(AiProvider):
         tools = (
             [types.Tool(google_search=types.GoogleSearch())] if allow_web_search else None
         )
+        contents = _user_content(user_message)
+        config = types.GenerateContentConfig(
+            system_instruction=_execute_system(
+                task,
+                rules,
+                comments,
+                allow_web_search=allow_web_search,
+                plan_only=plan_only,
+            ),
+            tools=tools,
+        )
+        if on_delta is not None and not plan_only:
+            # #24 ライブ実況: 出典は本文確定後にまとめて付加する（増分には含めない）
+            text, sources, usage = await self._generate_stream(
+                model=settings.gemini_model_execute,
+                contents=contents,
+                config=config,
+                on_delta=on_delta,
+            )
+            if not text:
+                raise GeminiResponseError(
+                    "Gemini の execute ストリーム応答にテキストが含まれていません"
+                )
+            return ExecuteResult(content_md=_append_sources(text, sources), usage=usage)
         response = await self._generate(
             model=settings.gemini_model_execute,
-            contents=_user_content(user_message),
-            config=types.GenerateContentConfig(
-                system_instruction=_execute_system(
-                    task,
-                    rules,
-                    comments,
-                    allow_web_search=allow_web_search,
-                    plan_only=plan_only,
-                ),
-                tools=tools,
-            ),
+            contents=contents,
+            config=config,
         )
         content_md = _append_sources(
             _require_text(response, "execute"), _grounding_sources(response)

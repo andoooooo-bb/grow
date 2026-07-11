@@ -40,16 +40,34 @@ def _forbid_real_client(monkeypatch: pytest.MonkeyPatch):
 
 
 class FakeAsyncModels:
-    """client.aio.models.generate_content の記録付きフェイク。"""
+    """client.aio.models.generate_content / generate_content_stream の記録付きフェイク。"""
 
     def __init__(self, responses: list[types.GenerateContentResponse]) -> None:
         self._responses = list(responses)
+        self._stream_chunks: list[list[types.GenerateContentResponse]] = []
         self.calls: list[dict] = []
+        self.stream_calls: list[dict] = []
+
+    def queue_stream(self, chunks: list[types.GenerateContentResponse]) -> None:
+        """generate_content_stream の1回分の応答チャンク列を積む（#24）。"""
+        self._stream_chunks.append(list(chunks))
 
     async def generate_content(self, *, model, contents, config=None):
         self.calls.append({"model": model, "contents": contents, "config": config})
         assert self._responses, "予期しない generate_content 呼び出し"
         return self._responses.pop(0)
+
+    async def generate_content_stream(self, *, model, contents, config=None):
+        """実SDK同様、await するとチャンクの AsyncIterator が返る（#24）。"""
+        self.stream_calls.append({"model": model, "contents": contents, "config": config})
+        assert self._stream_chunks, "予期しない generate_content_stream 呼び出し"
+        chunks = self._stream_chunks.pop(0)
+
+        async def _aiter():
+            for chunk in chunks:
+                yield chunk
+
+        return _aiter()
 
 
 class FakeClient:
@@ -316,6 +334,127 @@ async def test_usage_defaults_to_zero_when_metadata_missing(patch_client):
     result = await GeminiProvider().execute(_task(), [], [])
     assert result.usage.input_tokens == 0
     assert result.usage.output_tokens == 0
+
+
+# ---- (b') execute のライブ実況（#24: generate_content_stream 経路） ------------------
+
+
+def _stream_chunk(
+    text: str | None,
+    *,
+    grounding: types.GroundingMetadata | None = None,
+    usage: tuple[int, int] | None = None,
+) -> types.GenerateContentResponse:
+    """ストリーム1チャンク分の応答（text は増分。usage は通常最終チャンクのみ載る）。"""
+    parts = [types.Part(text=text)] if text is not None else []
+    candidate = types.Candidate(
+        content=types.Content(role="model", parts=parts),
+        grounding_metadata=grounding,
+    )
+    return types.GenerateContentResponse(
+        candidates=[candidate],
+        usage_metadata=_usage_meta(*usage) if usage is not None else None,
+    )
+
+
+async def test_execute_streams_deltas_and_appends_sources(patch_client):
+    """on_delta 指定時: 増分が順に届き、全文＋出典（全チャンクから重複なし収集）を返す。
+
+    usage は usage_metadata を載せた最終チャンクの累計値を使う。
+    """
+    fake = patch_client()
+    fake.models.queue_stream(
+        [
+            _stream_chunk("# 調査レポート\n\n"),
+            _stream_chunk(
+                "候補Aが有力。",
+                grounding=_grounding(("https://example.com/a", "候補A")),
+            ),
+            _stream_chunk(
+                "候補Bも比較した。",
+                grounding=_grounding(
+                    ("https://example.com/a", "重複は捨てる"),
+                    ("https://example.com/b", None),
+                ),
+                usage=(321, 45),
+            ),
+        ]
+    )
+    deltas: list[str] = []
+
+    async def on_delta(delta: str) -> None:
+        deltas.append(delta)
+
+    result = await GeminiProvider().execute(_task(), _RULES, [], on_delta=on_delta)
+
+    # 増分は「累積でなく差分」がそのままの順で届く
+    assert deltas == ["# 調査レポート\n\n", "候補Aが有力。", "候補Bも比較した。"]
+    # 全文 = 増分の連結。出典はストリーム完了後に付加される（増分には含めない）
+    assert result.content_md.startswith("".join(deltas))
+    assert "## 出典" in result.content_md
+    assert "- [候補A](https://example.com/a)" in result.content_md
+    assert "- https://example.com/b" in result.content_md
+    assert result.content_md.count("https://example.com/a") == 1  # 重複なし
+    assert result.usage.input_tokens == 321
+    assert result.usage.output_tokens == 45
+
+    # ストリーム経路が使われ、非ストリームの generate_content は呼ばれない
+    assert fake.models.calls == []
+    assert len(fake.models.stream_calls) == 1
+    call = fake.models.stream_calls[0]
+    assert call["model"] == "gemini-2.5-pro"  # 実作業は Pro 系（§00 #6）
+    assert any(t.google_search is not None for t in call["config"].tools)
+    assert "# 適用ルール（優先度: 高→低）" in call["config"].system_instruction
+
+
+async def test_execute_stream_skips_textless_chunks(patch_client):
+    """text の無いチャンク（grounding/usage のみ等）は on_delta を呼ばず収集だけ行う。"""
+    fake = patch_client()
+    fake.models.queue_stream(
+        [
+            _stream_chunk("本文", usage=(10, 2)),
+            _stream_chunk(None, usage=(100, 20)),  # 終端の usage 専用チャンク
+        ]
+    )
+    deltas: list[str] = []
+
+    async def on_delta(delta: str) -> None:
+        deltas.append(delta)
+
+    result = await GeminiProvider().execute(_task(), [], [], on_delta=on_delta)
+    assert deltas == ["本文"]
+    assert result.content_md == "本文"
+    assert result.usage.input_tokens == 100  # 最後に usage を載せたチャンクの累計
+    assert result.usage.output_tokens == 20
+    assert fake.models.calls == []
+
+
+async def test_execute_stream_raises_when_no_text_arrives(patch_client):
+    fake = patch_client()
+    fake.models.queue_stream([_stream_chunk(None), _stream_chunk(None, usage=(5, 0))])
+
+    async def on_delta(delta: str) -> None:  # pragma: no cover — 呼ばれないはず
+        raise AssertionError("textless ストリームで on_delta が呼ばれた")
+
+    with pytest.raises(GeminiResponseError):
+        await GeminiProvider().execute(_task(), [], [], on_delta=on_delta)
+
+
+async def test_execute_plan_only_stays_non_stream_even_with_on_delta(patch_client):
+    """plan_only=True（L0）は on_delta を渡されても非ストリームのまま（#24 仕様）。"""
+    fake = patch_client(_text_response("## 実行プラン"))
+    deltas: list[str] = []
+
+    async def on_delta(delta: str) -> None:
+        deltas.append(delta)
+
+    result = await GeminiProvider().execute(
+        _task(), [], [], plan_only=True, on_delta=on_delta
+    )
+    assert result.content_md == "## 実行プラン"
+    assert deltas == []
+    assert len(fake.models.calls) == 1  # 非ストリーム経路
+    assert fake.models.stream_calls == []
 
 
 # ---- (c) propose_subtasks（§7.4b） -------------------------------------------------

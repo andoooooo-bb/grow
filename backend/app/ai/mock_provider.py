@@ -10,6 +10,7 @@ usage は入力・出力の文字数から決定的に算出する（文字数 /
 """
 
 import json
+from collections.abc import Awaitable, Callable
 
 from app.ai.provider import (
     REVIEW_FINDINGS_MARKER,
@@ -122,6 +123,9 @@ REVIEW_FINDING_WITH_RULE_TEMPLATE = (
 )
 REVIEW_FINDING_GENERIC = "比較表に出典URL列がありません。出典を明記して追記してください"
 
+# --- ライブ実況（#24）: ストリーム模擬の分割点（決定的。文字数固定で数チャンクになる） ---
+STREAM_CHUNK_CHARS = 120
+
 
 class MockProvider(AiProvider):
     """プロトの固定応答をそのまま返す決定的プロバイダ（費用ゼロ・ネットワーク不要）。"""
@@ -134,15 +138,21 @@ class MockProvider(AiProvider):
         *,
         policy: dict | None = None,
         plan_only: bool = False,
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> ExecuteResult:
         allow_web_search = bool((policy or {}).get("allowWebSearch", True))
         if plan_only:
-            # L0（#21）: 成果物は作らず「実行プラン」だけを返す
+            # L0（#21）: 成果物は作らず「実行プラン」だけを返す（実況しない #24）
             content_md = self._build_plan(task, rules)
         else:
             content_md = self._build_report(
                 task, rules, comments, allow_web_search=allow_web_search
             )
+            if on_delta is not None:
+                # #24 ライブ実況の模擬: 固定幅で分割した増分を順次届ける
+                # （決定的。全増分の連結 = content_md）
+                for chunk in self._stream_chunks(content_md):
+                    await on_delta(chunk)
         return ExecuteResult(
             content_md=content_md,
             usage=self._usage(content_md, task, rules, comments),
@@ -276,6 +286,14 @@ class MockProvider(AiProvider):
         )
 
     # --- 内部ヘルパ ---
+
+    @staticmethod
+    def _stream_chunks(content_md: str) -> list[str]:
+        """成果物を固定幅（STREAM_CHUNK_CHARS）で分割する（#24。決定的・分割点固定）。"""
+        return [
+            content_md[i : i + STREAM_CHUNK_CHARS]
+            for i in range(0, len(content_md), STREAM_CHUNK_CHARS)
+        ]
 
     @staticmethod
     def _usage(output_text: str, *inputs: object) -> TokenUsage:

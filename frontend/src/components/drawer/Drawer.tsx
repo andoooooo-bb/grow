@@ -15,6 +15,7 @@ import { ChatMode } from './ChatMode';
 import { Composer } from './Composer';
 import { DrawerHeader } from './DrawerHeader';
 import { LearnSection } from './LearnSection';
+import { LiveDraftSection } from './LiveDraftSection';
 import { SubtaskSection } from './SubtaskSection';
 import './Drawer.css';
 
@@ -87,6 +88,8 @@ export function Drawer() {
           <AppliedRules task={task} />
           {/* (c) 学習（§3.3.2c, #14）: 完了系（you_review/reviewing/done）以外は非表示 */}
           <LearnSection task={task} />
+          {/* (c-2') ライブ実況（#24）: ai_work 中の生成途中テキスト。完了で (c-2) に差し替わる */}
+          <LiveDraftSection task={task} />
           {/* (c-2) 成果物（§3.3.2 c-2, #10）: 学習(c)と サブタスク(d) の間に置く */}
           <ArtifactSection task={task} canAssignAi={canAssignAi} />
           {/* (d) サブタスク（§3.3.2d, #12）: childIds が無ければコンポーネント側で非表示 */}

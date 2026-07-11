@@ -28,8 +28,6 @@ def captured_jobs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
 @pytest.fixture
 def zero_delays(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(execute_mod, "PROGRESS_DELAY_SEC", 0.0)
-    monkeypatch.setattr(execute_mod, "COMPLETE_DELAY_SEC", 0.0)
     monkeypatch.setattr(execute_mod, "RETRY_BACKOFF_SEC", 0.0)
 
 
@@ -151,7 +149,7 @@ async def test_execute_job_failure_comment_is_executor(
     """最終失敗時の人へのハンドオフコメントも実行AI（executor）名義。"""
 
     class _FailingProvider:
-        async def execute(self, task: dict, rules: list, comments: list):
+        async def execute(self, task: dict, rules: list, comments: list, **kwargs):
             raise RuntimeError("模擬的な失敗")
 
     monkeypatch.setattr(execute_mod, "get_provider", lambda: _FailingProvider())
@@ -163,7 +161,7 @@ async def test_execute_job_failure_comment_is_executor(
     conn = await db_connect()
     try:
         roles = await _agent_roles(conn, "T-104")
-        # 着手・進捗・失敗ハンドオフ（リトライで進捗は1回のみ）
+        # 着手・失敗ハンドオフ（#24: delta 未受信で失敗するため進捗コメントは無い）
         assert roles[0] == ("ai", "executor")
         assert roles[-1] == ("ai", "executor")
     finally:

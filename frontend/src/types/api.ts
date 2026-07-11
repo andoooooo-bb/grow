@@ -105,6 +105,16 @@ export interface ArtifactResponse {
   artifacts: Artifact[];
 }
 
+// artifact.delta イベントの payload（#24 ライブ実況。サーバ非永続 —
+// backend/app/events.py ARTIFACT_DELTA と鏡写し）。
+// delta は生成テキストの増分（累積ではない）。seq は 1 始まりの受信連番で、
+// seq=1 は新しいストリームの開始（liveDraft をリセットして連結し直す）
+export interface ArtifactDeltaEvent {
+  taskId: string;
+  delta: string;
+  seq: number;
+}
+
 // POST /tasks/:id/artifacts（人の編集を新版として保存, #10 §00 #12）
 export interface ArtifactCreate {
   contentMd: string;

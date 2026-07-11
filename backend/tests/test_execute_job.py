@@ -1,10 +1,12 @@
 """execute ジョブ（app/jobs/execute.py, §7.2/§7.3）のテスト。
 
-演出ディレイ・リトライバックオフは 0 秒に差し替え、
+リトライバックオフは 0 秒に差し替え、
 worker エンドポイント POST /internal/jobs/run 経由で実行を検証する。
 local ランナー（asyncio.create_task）経路は test_local_runner_completes_job で検証。
 #23 以降、execute は成果物保存後に review ジョブを enqueue する（セルフレビュー連鎖）。
 mock は初回成果物を必ず1回 revise するため、完走 = execute→review→execute→review。
+#24 以降、進行は本物のストリーミング実況（artifact.delta ＋ 受信文字数ベースの進捗の
+間引き配信）。擬似ディレイ・固定45%は廃止された。
 """
 
 from uuid import uuid4
@@ -21,8 +23,6 @@ from tests.helpers import db_connect, drain_events, drain_jobs
 
 @pytest.fixture
 def zero_delays(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(execute_mod, "PROGRESS_DELAY_SEC", 0.0)
-    monkeypatch.setattr(execute_mod, "COMPLETE_DELAY_SEC", 0.0)
     monkeypatch.setattr(execute_mod, "RETRY_BACKOFF_SEC", 0.0)
 
 
@@ -139,32 +139,110 @@ async def test_execute_job_success(
     finally:
         await conn.close()
 
-    # SSE: execute（中間→45%→v1）→ review 指摘 → execute（中間→45%→v2）→ 承認→完了→you_review
+    # SSE（#24）: execute（中間コメント＋delta 実況＋進捗→v1）→ review 指摘
+    #            → execute（中間＋実況→v2）→ 承認→完了→you_review
     events = drain_events(event_queue)
-    assert [e["type"] for e in events] == [
-        "comment.created",  # 中間
-        "task.updated",  # progress 45
+
+    # 骨格（実況イベント = artifact.delta と ai_work 中の進捗 task.updated を除く）は
+    # #23 と同じ列で維持される
+    skeleton = [
+        e
+        for e in events
+        if e["type"] != "artifact.delta"
+        and not (e["type"] == "task.updated" and e["payload"]["status"] == "ai_work")
+    ]
+    assert [e["type"] for e in skeleton] == [
+        "comment.created",  # 中間（最初の delta 受信時）
         "artifact.created",  # v1
         "comment.created",  # レビュー指摘（reviewer）
-        "task.updated",  # commentCount 同期
         "comment.created",  # 中間（修正）
-        "task.updated",  # progress 45
         "artifact.created",  # v2
         "comment.created",  # 承認（reviewer）
         "comment.created",  # 完了（executor）
         "task.updated",  # you_review
     ]
-    assert events[1]["payload"]["progress"] == 45
-    assert events[1]["payload"]["status"] == "ai_work"
-    assert events[2]["payload"]["version"] == 1
-    assert events[2]["payload"]["jobId"] == job_id
-    assert events[3]["payload"]["agentRole"] == "reviewer"
-    assert "【レビュー指摘】" in events[3]["payload"]["text"]
-    assert events[7]["payload"]["version"] == 2
-    assert events[8]["payload"]["agentRole"] == "reviewer"
+    assert skeleton[0]["payload"]["text"] == execute_mod.PROGRESS_COMMENT
+    assert skeleton[1]["payload"]["version"] == 1
+    assert skeleton[1]["payload"]["jobId"] == job_id
+    assert skeleton[2]["payload"]["agentRole"] == "reviewer"
+    assert "【レビュー指摘】" in skeleton[2]["payload"]["text"]
+    assert skeleton[4]["payload"]["version"] == 2
+    assert skeleton[5]["payload"]["agentRole"] == "reviewer"
     assert events[-1]["payload"]["status"] == "you_review"
     assert events[-1]["payload"]["progress"] is None
     assert events[-1]["payload"]["laneKey"] == "review"
+
+    # ライブ実況（#24）: v1 / v2 それぞれのストリームで delta が seq 昇順（1始まり）で届き、
+    # 増分の連結が確定版 contentMd と一致する（mock は出典付加なし = 本文が全増分）
+    deltas = [e["payload"] for e in events if e["type"] == "artifact.delta"]
+    assert all(d["taskId"] == "T-104" for d in deltas)
+    restart = next(i for i, d in enumerate(deltas) if i > 0 and d["seq"] == 1)
+    v1_deltas, v2_deltas = deltas[:restart], deltas[restart:]
+    assert len(v1_deltas) >= 2  # 数チャンクに分割されている
+    assert [d["seq"] for d in v1_deltas] == list(range(1, len(v1_deltas) + 1))
+    assert [d["seq"] for d in v2_deltas] == list(range(1, len(v2_deltas) + 1))
+    created = [e["payload"] for e in events if e["type"] == "artifact.created"]
+    assert "".join(d["delta"] for d in v1_deltas) == created[0]["contentMd"]
+    assert "".join(d["delta"] for d in v2_deltas) == created[1]["contentMd"]
+
+    # 進捗（v1 ストリーム中の task.updated）: 受信文字数ベースで単調増加・上限 95・
+    # delta ごとには配信しない（5% 刻みの間引き）
+    first_created = next(i for i, e in enumerate(events) if e["type"] == "artifact.created")
+    v1_progress = [
+        e["payload"]["progress"]
+        for e in events[:first_created]
+        if e["type"] == "task.updated"
+    ]
+    assert len(v1_progress) >= 1  # 最初の delta で必ず1回配信される
+    assert v1_progress == sorted(v1_progress)  # 単調増加（同値の再配信もない）
+    assert len(set(v1_progress)) == len(v1_progress)
+    assert all(0 <= p <= execute_mod.PROGRESS_MAX for p in v1_progress)
+    assert len(v1_progress) < len(v1_deltas)  # 間引きされている
+
+
+async def test_live_stream_throttles_progress_and_comments_once(
+    event_queue, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_LiveStream 単体（#24）: artifact.delta は毎回・中間コメントは初回のみ・
+    進捗の task.updated は5%刻みが変わったときのみ（同値スキップ）。"""
+    comment_calls: list[int] = []
+    progress_calls: list[int] = []
+
+    async def fake_comment(task_row, progress: int) -> None:
+        comment_calls.append(progress)
+
+    async def fake_progress(task_row, progress: int) -> None:
+        progress_calls.append(progress)
+
+    monkeypatch.setattr(execute_mod, "_post_progress_comment", fake_comment)
+    monkeypatch.setattr(execute_mod, "_publish_progress", fake_progress)
+
+    # PROGRESS_CHARS_PER_PERCENT=40 / PROGRESS_STEP_PERCENT=5 → 5% = 200文字
+    stream = execute_mod._LiveStream({"human_id": "T-104"}, skip_comment=False)
+    await stream.on_delta("a" * 100)  # 2% → 初回: 中間コメント（進捗込み）
+    await stream.on_delta("a" * 50)  # 3% → 同じ 0-5% 帯 → スキップ（同値スキップ）
+    await stream.on_delta("a" * 100)  # 6% → 5% 帯を跨いだ → 配信
+    await stream.on_delta("a" * 40)  # 7% → 同じ帯 → スキップ
+    await stream.on_delta("a" * 4000)  # 107% → 上限 95 で配信
+    await stream.on_delta("a" * 400)  # それ以上は 95 のまま → スキップ
+
+    assert comment_calls == [2]  # 中間コメントは最初の delta で1回だけ
+    assert progress_calls == [6, 95]  # 間引き＋上限クランプ
+
+    # artifact.delta 自体は全 delta ぶん配信される（seq は 1 始まりの連番）
+    deltas = [e for e in drain_events(event_queue) if e["type"] == "artifact.delta"]
+    assert [d["payload"]["seq"] for d in deltas] == [1, 2, 3, 4, 5, 6]
+    assert all(d["payload"]["taskId"] == "T-104" for d in deltas)
+    assert deltas[0]["payload"]["delta"] == "a" * 100
+
+    # 再試行（skip_comment=True）: 中間コメントは再投稿しない
+    comment_calls.clear()
+    progress_calls.clear()
+    retry_stream = execute_mod._LiveStream({"human_id": "T-104"}, skip_comment=True)
+    await retry_stream.on_delta("a" * 100)  # 2% → 0-5% 帯のまま → 何も配信しない
+    await retry_stream.on_delta("a" * 200)  # 7% → 帯を跨いだ → 進捗のみ配信
+    assert comment_calls == []
+    assert progress_calls == [7]
 
 
 async def test_local_runner_completes_job(
@@ -228,9 +306,10 @@ async def test_execute_job_failure_retries_then_handoff(
         comments = await conn.fetch(
             "select * from comments where task_id = $1 order by created_at", task["id"]
         )
-        # 着手 → 中間（初回試行のみ。リトライでは重複しない）→ 失敗
-        assert len(comments) == 3
-        assert comments[2]["text"] == (
+        # 着手 → 失敗（#24: 中間コメントは最初の delta 受信時に投稿されるため、
+        # delta が届く前に失敗するプロバイダでは投稿されない）
+        assert len(comments) == 2
+        assert comments[1]["text"] == (
             "作業中にエラーが発生しました。内容を確認のうえ、再度お任せください。"
             "（理由: 模擬的な失敗: provider が応答しません）"
         )
