@@ -4,6 +4,10 @@
 - progress は §5.6 不変条件（ai_work のときのみ非null）。手動指定の違反は 422、
   ai_work 以外への遷移時は自動で null 化する。
 - 変更後は updated_at を更新し、更新後の Task DTO を返してイベントバスへ publish する。
+- POST /tasks（直接呼び出し）成功後は受付エージェント（#27 kind='intake'）を enqueue し、
+  execute | hearing | breakdown のルートをAIが自分で判定する。confirmBreakdown 経由の
+  サブタスク（parentId あり。repo 直呼びで本エンドポイントを通らない）と seed 済み
+  タスク（SQL 投入）は対象外。
 """
 
 from typing import Any
@@ -12,9 +16,11 @@ from fastapi import APIRouter, HTTPException
 
 from app.db import get_pool
 from app.domain.dto import TaskCreate, TaskPatch
-from app.domain.models import Task, TaskStatus
+from app.domain.models import AiJobKind, Task, TaskStatus
 from app.domain.state_machine import can_transition, validate_progress_invariant
 from app.events import TASK_UPDATED, publish_event
+from app.jobs import queue as jobs_queue
+from app.repo import ai_jobs as ai_jobs_repo
 from app.repo import tasks as tasks_repo
 
 router = APIRouter(tags=["tasks"])
@@ -23,12 +29,22 @@ router = APIRouter(tags=["tasks"])
 @router.post("/tasks", status_code=201)
 async def create_task(payload: TaskCreate) -> Task:
     pool = await get_pool()
+    intake_job_id: str | None = None
     async with pool.acquire() as conn, conn.transaction():
         try:
             task = await tasks_repo.create_task(conn, payload)
         except tasks_repo.InvalidParentError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if payload.parent_id is None:
+            # #27 受付エージェント: 直接作成されたカードのみ判定する
+            # （親から生成されるサブタスクには走らせない）
+            row = await tasks_repo.get_task_row(conn, task.id)
+            job_row = await ai_jobs_repo.create_job(conn, row, kind=AiJobKind.INTAKE)
+            intake_job_id = str(job_row["id"])
     publish_event(TASK_UPDATED, task.model_dump(mode="json", by_alias=True))
+    if intake_job_id is not None:
+        # enqueue はコミット後（ジョブ側が別コネクションで行を読むため §7.2）
+        await jobs_queue.enqueue_job(intake_job_id, kind=AiJobKind.INTAKE.value)
     return task
 
 

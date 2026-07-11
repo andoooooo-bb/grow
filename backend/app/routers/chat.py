@@ -4,7 +4,9 @@
 - POST /tasks/{human_id}/chat/start        冪等。chat が空なら AI 初期質問を生成し、
                                            spec へ遷移可能なら status=spec（レーンは変えない §5.2）
 - POST /tasks/{human_id}/chat              人メッセージを即保存 → バックグラウンド
-                                           （+0.85s §4.4）で AI 応答＋分解候補を SSE 配信
+                                           （+0.85s §4.4）で深掘りエージェント（#27）が
+                                           「情報は十分か」を自己判定し、足りなければ
+                                           深掘り質問のみ、十分なら AI 応答＋分解候補を配信
 - POST /tasks/{human_id}/breakdown/confirm 候補を子カード化し先頭AI子が自動着手（§1.6 step5）
 
 分解候補はサーバ側に永続化しない: subtask.proposal イベントでクライアントへ届け、
@@ -88,10 +90,13 @@ async def drain_chat_replies() -> None:
 
 
 async def _chat_reply_job(human_id: str) -> None:
-    """sendChat のバックグラウンド部分（§5.3 sendChat step2）。
+    """sendChat のバックグラウンド部分（§5.3 sendChat step2 / #27 深掘り自己判定）。
 
-    +850ms 後に (1) AI応答を chat_messages へ保存して chat.message.created を配信し、
-    (2) propose_subtasks の分解候補を subtask.proposal で配信する（永続化しない）。
+    +850ms 後に深掘りエージェント（provider.deep_dive）が「分解に十分な情報が
+    揃ったか」を毎ターン自己判定する:
+    - ask     → 深掘り質問を chat_messages へ保存して chat.message.created のみ配信
+    - propose → AI応答の保存・配信に加え、分解候補を subtask.proposal で配信
+                （候補は永続化しない）
     """
     try:
         await asyncio.sleep(CHAT_REPLY_DELAY_SEC)
@@ -108,22 +113,21 @@ async def _chat_reply_job(human_id: str) -> None:
         rule_dicts = [rules_repo.rule_prompt_dict(r) for r in rule_rows]
         chat_dicts = [_chat_prompt_dict(m) for m in history]
 
-        provider = get_provider()
-        reply = await provider.chat_reply(task_dict, chat_dicts, rule_dicts)
+        result = await get_provider().deep_dive(task_dict, chat_dicts, rule_dicts)
         async with pool.acquire() as conn:
             message = await chat_repo.create_chat_message(
-                conn, row, author=Author.AI, text=reply.text
+                conn, row, author=Author.AI, text=result.text
             )
         publish_event(CHAT_MESSAGE_CREATED, message.model_dump(mode="json", by_alias=True))
 
-        proposal = await provider.propose_subtasks(
-            task_dict, [*chat_dicts, _chat_prompt_dict(message)], rule_dicts
-        )
+        if result.mode != "propose":
+            return  # ask: 深掘り質問のみ（分解はまだ提案しない #27）
+
         event = SubtaskProposalEvent(
             task_id=human_id,
             subtasks=[
                 SubtaskProposal(title=s.title, owner=Owner(s.owner), rationale=s.rationale)
-                for s in proposal.subtasks
+                for s in result.subtasks
             ],
         )
         publish_event(SUBTASK_PROPOSAL, event.model_dump(mode="json", by_alias=True))

@@ -879,3 +879,141 @@ async def test_execute_omits_reject_section_without_reject_comment(patch_client)
     )
     system = fake.models.calls[0]["config"].system_instruction
     assert "# 差し戻し理由（最優先で対処）" not in system
+
+
+# ---- assess_task（#27 受付エージェント。Flash・強制FC） ------------------------------
+
+
+async def test_assess_task_declares_schema_and_forces_function_calling(patch_client):
+    fake = patch_client(
+        _function_call_response(
+            "assess_task", {"route": "execute", "questions": [], "reason": "具体的なため"}
+        )
+    )
+    await GeminiProvider().assess_task(_task(), _RULES)
+
+    call = fake.models.calls[0]
+    assert call["model"] == "gemini-2.5-flash"  # 受付判定は Flash 系（低コスト #27）
+
+    decl = call["config"].tools[0].function_declarations[0]
+    assert decl.name == "assess_task"
+    assert decl.parameters.required == ["route", "reason"]
+    assert decl.parameters.properties["route"].enum == ["execute", "hearing", "breakdown"]
+
+    fc = call["config"].tool_config.function_calling_config
+    assert fc.mode == types.FunctionCallingConfigMode.ANY  # function calling を強制
+    assert fc.allowed_function_names == ["assess_task"]
+
+    system = call["config"].system_instruction
+    assert "受付エージェント" in system
+    assert "競合SaaS 5社の料金プランを調査" in system  # タスクの注入
+    assert "レポートは結論→根拠の順で書き、冒頭に3行サマリーを置く" in system  # ルール注入
+
+
+async def test_assess_task_converts_function_call_args(patch_client):
+    patch_client(
+        _function_call_response(
+            "assess_task",
+            {
+                "route": "hearing",
+                "questions": ["ゴールは？", "期限は？"],
+                "reason": "前提が不明なため",
+            },
+            usage=(90, 25),
+        )
+    )
+    result = await GeminiProvider().assess_task(_task(), [])
+    assert result.route == "hearing"
+    assert result.questions == ["ゴールは？", "期限は？"]
+    assert result.reason == "前提が不明なため"
+    assert result.usage.input_tokens == 90
+    assert result.usage.output_tokens == 25
+
+
+async def test_assess_task_raises_on_invalid_route(patch_client):
+    patch_client(
+        _function_call_response("assess_task", {"route": "later", "reason": "様子見"})
+    )
+    with pytest.raises(GeminiResponseError):
+        await GeminiProvider().assess_task(_task(), [])
+
+
+async def test_assess_task_raises_on_hearing_without_questions(patch_client):
+    """質問なしの hearing は intake ジョブが投稿できないため明確な例外にする。"""
+    patch_client(
+        _function_call_response(
+            "assess_task", {"route": "hearing", "questions": [], "reason": "不明なため"}
+        )
+    )
+    with pytest.raises(GeminiResponseError):
+        await GeminiProvider().assess_task(_task(), [])
+
+
+# ---- deep_dive（#27 深掘り自己判定。2ツール同時提示・mode=ANY で自己選択） ------------
+
+
+async def test_deep_dive_offers_both_tools_with_any_mode(patch_client):
+    fake = patch_client(
+        _function_call_response("ask_question", {"question": "対象読者は誰ですか？"})
+    )
+    chat = [
+        {"who": "ai", "text": "前提を教えてください"},
+        {"who": "human", "text": "主要5社を比較したい"},
+    ]
+    await GeminiProvider().deep_dive(_task(), chat, _RULES)
+
+    call = fake.models.calls[0]
+    assert call["model"] == "gemini-2.5-flash"
+
+    decls = call["config"].tools[0].function_declarations
+    assert [d.name for d in decls] == ["ask_question", "propose_breakdown"]
+
+    fc = call["config"].tool_config.function_calling_config
+    assert fc.mode == types.FunctionCallingConfigMode.ANY  # どちらかは必ず呼ぶ
+    assert fc.allowed_function_names == ["ask_question", "propose_breakdown"]  # 選択は自己判断
+
+    # 会話履歴の写像（human→user / ai→model）＋末尾に判断指示
+    contents = call["contents"]
+    assert [c.role for c in contents[:2]] == ["model", "user"]
+    assert contents[-1].role == "user"
+
+
+async def test_deep_dive_returns_ask_mode_for_ask_question_call(patch_client):
+    patch_client(
+        _function_call_response(
+            "ask_question", {"question": "完成イメージを教えてください"}, usage=(70, 12)
+        )
+    )
+    result = await GeminiProvider().deep_dive(_task(), [], [])
+    assert result.mode == "ask"
+    assert result.text == "完成イメージを教えてください"
+    assert result.subtasks == []
+    assert result.usage.input_tokens == 70
+
+
+async def test_deep_dive_returns_propose_mode_with_subtasks(patch_client):
+    patch_client(
+        _function_call_response(
+            "propose_breakdown",
+            {
+                "message": "前提が揃ったので、次のように分解します。",
+                "subtasks": [
+                    {"title": "要件整理", "owner": "ai"},
+                    {"title": "内容の確認", "owner": "human", "rationale": "意思決定のため"},
+                ],
+            },
+        )
+    )
+    result = await GeminiProvider().deep_dive(_task(), [], [])
+    assert result.mode == "propose"
+    assert result.text == "前提が揃ったので、次のように分解します。"
+    assert result.subtasks == [
+        SubtaskProposal(title="要件整理", owner="ai", rationale=None),
+        SubtaskProposal(title="内容の確認", owner="human", rationale="意思決定のため"),
+    ]
+
+
+async def test_deep_dive_raises_without_function_call(patch_client):
+    patch_client(_text_response("自由文で質問します: 目的は？"))
+    with pytest.raises(GeminiResponseError):
+        await GeminiProvider().deep_dive(_task(), [], [])

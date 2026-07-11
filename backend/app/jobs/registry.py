@@ -37,6 +37,7 @@ import asyncpg
 from app.db import get_pool
 from app.domain.models import AiJobKind, AiJobStatus
 from app.jobs.execute import JobNotFoundError, run_execute_job_row
+from app.jobs.intake import run_intake_job_row
 from app.jobs.orchestrate import run_orchestrate_job_row
 from app.jobs.review import run_review_job_row
 from app.repo import ai_jobs as ai_jobs_repo
@@ -116,3 +117,4 @@ async def dispatch_job(
 register(AiJobKind.EXECUTE, run_execute_job_row)
 register(AiJobKind.ORCHESTRATE, run_orchestrate_job_row)
 register(AiJobKind.REVIEW, run_review_job_row)
+register(AiJobKind.INTAKE, run_intake_job_row)

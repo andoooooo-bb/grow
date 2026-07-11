@@ -79,5 +79,10 @@ async def api_client(test_db_url: str, monkeypatch: pytest.MonkeyPatch):
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
 
+    # local ランナーの実行中ジョブ（#27 intake の自動 enqueue 等）を先に完了させる
+    # （プール破棄後に走ると grow_test 外へ書きに行く危険があるため）
+    from app.jobs.queue import drain_local_jobs
+
+    await drain_local_jobs()
     await db.close_pool()
     get_settings.cache_clear()  # 後続テスト（test_schema 等）は dev DB 設定に戻す

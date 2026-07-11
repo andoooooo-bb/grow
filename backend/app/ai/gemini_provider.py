@@ -28,9 +28,12 @@ from google.genai import types
 
 from app.ai.provider import (
     AiProvider,
+    AssessResult,
     ChatReplyResult,
     CiProposal,
+    DeepDiveResult,
     ExecuteResult,
+    IntakeRoute,
     NextAction,
     NextActionResult,
     ProposeRulesResult,
@@ -957,6 +960,96 @@ class GeminiProvider(AiProvider):
             usage=_usage_from(response),
         )
 
+    # ---- 受付・深掘りエージェント（#27。並行 Wave との衝突回避のため末尾追記） --------
+
+    async def assess_task(self, task: dict, rules: list[dict]) -> AssessResult:
+        """受付判定（#27）: 進め方ルートを強制 FC で1つ選ばせる（Flash 系・低コスト）。"""
+        settings = get_settings()
+        response = await self._generate(
+            model=settings.gemini_model_light,
+            contents=_user_content(
+                f"上記の新しいタスクを受付エージェントとして判定し、"
+                f"{ASSESS_TASK_TOOL_NAME} ツールで結果を返してください。"
+            ),
+            config=self._forced_function_config(
+                system=_assess_task_system(task, rules),
+                declaration=ASSESS_TASK_DECLARATION,
+            ),
+        )
+        args = _function_call_args(response, ASSESS_TASK_TOOL_NAME)
+        route, questions, reason = _parse_assessment(args)
+        return AssessResult(
+            route=route, questions=questions, reason=reason, usage=_usage_from(response)
+        )
+
+    async def deep_dive(
+        self, task: dict, chat: list[dict], rules: list[dict]
+    ) -> DeepDiveResult:
+        """深掘り自己判定（#27）: ask_question / propose_breakdown の選択をモデルに委ねる。
+
+        2つの FunctionDeclaration を同時に渡し、mode=ANY ＋ allowed_function_names 複数で
+        「どちらかのツールを必ず呼ぶが、どちらを呼ぶかは自分で判断する」呼び出しにする。
+        """
+        settings = get_settings()
+        contents = _chat_contents(
+            chat, empty_prompt="壁打ちを開始します。このタスクの前提を確認してください。"
+        )
+        contents += _user_content(
+            "これまでの壁打ちで分解に十分な情報が揃ったかを自分で判断してください。"
+            f"足りなければ {ASK_QUESTION_TOOL_NAME} ツールで深掘り質問を、"
+            f"十分なら {PROPOSE_BREAKDOWN_TOOL_NAME} ツールで分解案を返してください。"
+        )
+        response = await self._generate(
+            model=settings.gemini_model_light,
+            contents=contents,
+            config=self._any_function_config(
+                system=_deep_dive_system(task, rules),
+                declarations=[ASK_QUESTION_DECLARATION, PROPOSE_BREAKDOWN_DECLARATION],
+            ),
+        )
+        for call in response.function_calls or []:
+            if call.name == ASK_QUESTION_TOOL_NAME and isinstance(call.args, dict):
+                question = call.args.get("question")
+                if not isinstance(question, str) or not question:
+                    raise GeminiResponseError("ask_question の question が不正です")
+                return DeepDiveResult(
+                    mode="ask", text=question, subtasks=[], usage=_usage_from(response)
+                )
+            if call.name == PROPOSE_BREAKDOWN_TOOL_NAME and isinstance(call.args, dict):
+                message = call.args.get("message")
+                if not isinstance(message, str) or not message:
+                    raise GeminiResponseError("propose_breakdown の message が不正です")
+                return DeepDiveResult(
+                    mode="propose",
+                    text=message,
+                    subtasks=_parse_subtasks(call.args),
+                    usage=_usage_from(response),
+                )
+        raise GeminiResponseError(
+            "Gemini 応答に function_call "
+            f"{ASK_QUESTION_TOOL_NAME} / {PROPOSE_BREAKDOWN_TOOL_NAME} が含まれていません"
+        )
+
+    @staticmethod
+    def _any_function_config(
+        *, system: str, declarations: list[types.FunctionDeclaration]
+    ) -> types.GenerateContentConfig:
+        """複数ツールのどれかを必ず呼ばせる設定（#27。選択はモデルに委ねる）。
+
+        _forced_function_config の複数宣言版。mode=ANY ＋ allowed_function_names に
+        全宣言を並べることで「必ずどれかを呼ぶが、どれを呼ぶかは自己判断」になる。
+        """
+        return types.GenerateContentConfig(
+            system_instruction=system,
+            tools=[types.Tool(function_declarations=list(declarations))],
+            tool_config=types.ToolConfig(
+                function_calling_config=types.FunctionCallingConfig(
+                    mode=types.FunctionCallingConfigMode.ANY,
+                    allowed_function_names=[d.name or "" for d in declarations],
+                )
+            ),
+        )
+
 
 # ---- 夜間ナレッジCI（#26）の FunctionDeclaration・プロンプト・パーサ ------------------
 # #27 が同ファイル上部に追記するため、本ブロックはファイル末尾に置く
@@ -1171,3 +1264,162 @@ def _parse_ci_proposals(
             )
         )
     return proposals
+
+
+
+# ---- 受付・深掘りエージェントの宣言・プロンプト（#27。末尾追記） ----------------------
+
+ASSESS_TASK_TOOL_NAME = "assess_task"
+ASSESS_ROUTES: tuple[IntakeRoute, ...] = ("execute", "hearing", "breakdown")
+ASSESS_TASK_DECLARATION = types.FunctionDeclaration(
+    name=ASSESS_TASK_TOOL_NAME,
+    description=(
+        "新しく作られたタスクを受付エージェントとして判定し、"
+        "そのまま実行できるか・前提ヒアリングが要るか・分解が要るかを1つ選ぶ"
+    ),
+    parameters=types.Schema(
+        type=types.Type.OBJECT,
+        properties={
+            "route": types.Schema(
+                type=types.Type.STRING,
+                enum=list(ASSESS_ROUTES),
+                description=(
+                    "execute=内容が具体的でそのまま実行AIに任せられる / "
+                    "hearing=前提が不明で人への確認質問が要る / "
+                    "breakdown=大きい・抽象的でサブタスク分解から始めるべき"
+                ),
+            ),
+            "questions": types.Schema(
+                type=types.Type.ARRAY,
+                items=types.Schema(
+                    type=types.Type.STRING,
+                    description="hearing のとき人へ投げる初期質問（3件以内・簡潔に）",
+                ),
+                description="hearing のときのみ設定する。それ以外は空配列",
+            ),
+            "reason": types.Schema(
+                type=types.Type.STRING,
+                description="この判定の理由（日本語で1〜2文。人に見せるコメントになる）",
+            ),
+        },
+        required=["route", "reason"],
+    ),
+)
+
+ASK_QUESTION_TOOL_NAME = "ask_question"
+ASK_QUESTION_DECLARATION = types.FunctionDeclaration(
+    name=ASK_QUESTION_TOOL_NAME,
+    description="分解にはまだ情報が足りないと判断し、人へ深掘りの質問を1つ投げる",
+    parameters=types.Schema(
+        type=types.Type.OBJECT,
+        properties={
+            "question": types.Schema(
+                type=types.Type.STRING,
+                description="足りない前提を埋めるための深掘り質問（1つだけ・簡潔に）",
+            ),
+        },
+        required=["question"],
+    ),
+)
+
+PROPOSE_BREAKDOWN_TOOL_NAME = "propose_breakdown"
+PROPOSE_BREAKDOWN_DECLARATION = types.FunctionDeclaration(
+    name=PROPOSE_BREAKDOWN_TOOL_NAME,
+    description="分解に十分な情報が揃ったと判断し、サブタスク分解案を提示する",
+    parameters=types.Schema(
+        type=types.Type.OBJECT,
+        properties={
+            "message": types.Schema(
+                type=types.Type.STRING,
+                description="分解案の前置きとして壁打ちに返す短い応答文（日本語）",
+            ),
+            "subtasks": types.Schema(
+                type=types.Type.ARRAY,
+                items=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "title": types.Schema(
+                            type=types.Type.STRING, description="サブタスクの短い題名"
+                        ),
+                        "owner": types.Schema(
+                            type=types.Type.STRING,
+                            enum=["ai", "human"],
+                            description="AIが実行可能なら ai、人の判断/作業が必須なら human",
+                        ),
+                        "rationale": types.Schema(
+                            type=types.Type.STRING, description="なぜこの担当か（任意）"
+                        ),
+                    },
+                    required=["title", "owner"],
+                ),
+            ),
+        },
+        required=["message", "subtasks"],
+    ),
+)
+
+
+def _assess_task_system(task: dict, rules: list[dict]) -> str:
+    """#27 受付判定の system プロンプト（作成直後のタスクだけを材料に判定する）。"""
+    parts = [
+        "あなたは Grow の受付エージェントです。作成された直後のタスクを見て、",
+        "そのまま実行できるか・前提のヒアリングが要るか・分解が要るかを判定します。",
+        "",
+        "# 判定の原則",
+        "- 作業内容が具体的で成果物がイメージできるなら execute。",
+        "- タイトルが曖昧・目的や制約が読み取れないなら hearing とし、"
+        "questions に人へ確認する初期質問（3件以内）を入れる。",
+        "- 大きい/抽象的で複数の作業に分かれるテーマなら breakdown。",
+        "- reason は人に見せる判定理由コメントになる。日本語で1〜2文・簡潔に書く。",
+    ]
+    rules_section = _rules_section(rules)
+    if rules_section:
+        parts += ["", rules_section]
+    parts += [
+        "",
+        "# タスク",
+        f"タイトル: {task.get('title', '')}",
+        f"ラベル: {_labels(task)}",
+        "",
+        f"必ず {ASSESS_TASK_TOOL_NAME} ツールを呼び出して結果を返してください。",
+    ]
+    return "\n".join(parts)
+
+
+def _deep_dive_system(task: dict, rules: list[dict]) -> str:
+    """#27 深掘り自己判定の system プロンプト（毎ターン「情報は十分か」を判断させる）。"""
+    parts = [
+        "あなたは Grow の計画エージェントです。壁打ちの会話を読み、サブタスク分解に",
+        "踏み切れるだけの情報が揃っているかを毎ターン自分で判断します。",
+        "",
+        "# 判断の原則",
+        f"- 目的・制約・完成イメージに不明点が残るなら {ASK_QUESTION_TOOL_NAME} で"
+        "深掘り質問を1つだけ投げる（質問攻めにしない）。",
+        f"- 分解に十分な情報が揃ったと判断した時だけ {PROPOSE_BREAKDOWN_TOOL_NAME} で"
+        "分解案を提示する。",
+        "- owner は「人にしかできないか（意思決定・レビュー・対外・実世界作業）」で "
+        "ai / human を振り分ける。",
+    ]
+    rules_section = _rules_section(rules)
+    if rules_section:
+        parts += ["", rules_section]
+    parts += ["", f"タスク: {task.get('title', '')} / ラベル: {_labels(task)}"]
+    return "\n".join(parts)
+
+
+def _parse_assessment(args: dict) -> tuple[IntakeRoute, list[str], str]:
+    """assess_task の引数を (route, questions, reason) に変換する（自由文パース禁止）。"""
+    route = args.get("route")
+    questions = args.get("questions", [])
+    reason = args.get("reason")
+    if route not in ASSESS_ROUTES:
+        raise GeminiResponseError(f"assess_task の route が不正です: {route!r}")
+    if not isinstance(questions, list) or not all(isinstance(q, str) for q in questions):
+        raise GeminiResponseError("assess_task の questions が不正です")
+    if not isinstance(reason, str) or not reason:
+        raise GeminiResponseError("assess_task の reason が不正です")
+    cleaned = [q for q in questions if q]
+    if route == "hearing" and not cleaned:
+        # 質問なしの hearing は呼び出し側（intake ジョブ）が何も投稿できない
+        raise GeminiResponseError("assess_task の hearing に questions がありません")
+    return route, cleaned, reason

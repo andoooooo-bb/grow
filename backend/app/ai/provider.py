@@ -244,6 +244,28 @@ class AiProvider(ABC):
         提案の適用（採用/却下）は人が受信箱で判断する。ここでは提案のみを返す。
         """
 
+    @abstractmethod
+    async def assess_task(self, task: dict, rules: list[dict]) -> "AssessResult":
+        """受付判定（#27 intake）: 作成直後のタスクの進め方ルートを1つ選ぶ。
+
+        - execute: 内容が具体的でそのまま実行AIに任せられる
+        - hearing: 前提が不明。questions（初期質問）で人に確認してから進める
+        - breakdown: 大きい/抽象的。壁打ちでの分解から始める
+        reason は判定理由コメント（受付AIの可視化）の材料として必ず返す。
+        """
+
+    @abstractmethod
+    async def deep_dive(
+        self, task: dict, chat: list[dict], rules: list[dict]
+    ) -> "DeepDiveResult":
+        """深掘り自己判定（#27）: 壁打ちの毎ターン「情報は十分か」を自分で判断する。
+
+        - ask: まだ足りない。text は深掘り質問（subtasks は空）
+        - propose: 十分揃った。text は応答文、subtasks は分解候補
+          （呼び出し側が subtask.proposal を配信する）
+        実装は既存の chat_reply / propose_subtasks を内部で合成してもよい。
+        """
+
 
 # ---- 夜間ナレッジCI（#26）の構造化出力 ---------------------------------------------
 # 並行開発（#27 が同ファイル上部に追記する）とのコンフリクトを避けるため、
@@ -282,4 +304,43 @@ class ReconcileResult:
     """reconcile_rules（#26）の構造化出力。"""
 
     proposals: list[CiProposal]
+    usage: TokenUsage
+
+
+# ---- 受付・深掘りエージェント（#27。並行 Wave との衝突回避のため末尾追記） ------------
+
+# 受付エージェント（intake）が選べる進め方ルート
+IntakeRoute = Literal["execute", "hearing", "breakdown"]
+
+
+@dataclass(frozen=True, slots=True)
+class AssessResult:
+    """受付判定（#27 assess_task）の構造化出力。
+
+    - route: execute（即実行可）| hearing（前提ヒアリングが要る）| breakdown（分解が要る）
+    - questions: hearing のとき人へ投げる初期質問（それ以外は空リスト）
+    - reason: 判定理由（受付AIの判定理由コメントに可視化する）
+    """
+
+    route: IntakeRoute
+    questions: list[str]
+    reason: str
+    usage: TokenUsage
+
+
+# 深掘りエージェントの自己判定モード
+DeepDiveMode = Literal["ask", "propose"]
+
+
+@dataclass(frozen=True, slots=True)
+class DeepDiveResult:
+    """深掘り自己判定（#27 deep_dive）の構造化出力。
+
+    - mode=ask: text は深掘り質問。subtasks は空（提案しない）
+    - mode=propose: text は応答文。subtasks は分解候補（subtask.proposal の材料）
+    """
+
+    mode: DeepDiveMode
+    text: str
+    subtasks: list[SubtaskProposal]
     usage: TokenUsage

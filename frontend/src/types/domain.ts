@@ -20,7 +20,7 @@ export type Author = 'ai' | 'human';
 export type RuleScope = 'personal' | 'team';
 export type Confidence = 'high' | 'med' | 'low';
 
-export type AiJobKind = 'execute' | 'breakdown' | 'distill' | 'orchestrate' | 'review';
+export type AiJobKind = 'execute' | 'breakdown' | 'distill' | 'orchestrate' | 'review' | 'intake';
 export type AiJobStatus = 'queued' | 'running' | 'succeeded' | 'failed';
 
 // AIコメントの役割バッジ（#19 エージェント編成の見える化）。
@@ -50,6 +50,7 @@ export const JOB_KIND_ROLE = {
   distill: 'distiller',
   orchestrate: 'conductor', // 指揮者AI（#22 オートパイロット）
   review: 'reviewer', // レビューAI（#23 セルフレビュー）
+  intake: 'planner', // 受付エージェント（#27 カード作成時のルート判定。計画AI名義）
 } as const satisfies Record<AiJobKind, AgentRole>;
 
 // ---- STATUS_META ----

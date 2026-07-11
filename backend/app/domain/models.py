@@ -67,6 +67,7 @@ class AiJobKind(StrEnum):
     DISTILL = "distill"
     ORCHESTRATE = "orchestrate"  # 指揮者エージェント（#22 オートパイロット）
     REVIEW = "review"  # レビューAI（#23 セルフレビュー）
+    INTAKE = "intake"  # 受付エージェント（#27 カード作成時のルート判定）
 
 
 class AgentRole(StrEnum):

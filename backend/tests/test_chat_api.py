@@ -2,7 +2,8 @@
 
 - startChat: 初期質問（greetings 相当）の投入・spec 遷移・冪等性（§5.3 / §7.4a）
 - sendChat: 人メッセージ即返却 → バックグラウンド（ディレイ0に差し替え）で
-  AI 応答保存＋subtask.proposal イベント配信（§1.6 / §4.4）
+  深掘りエージェント（#27）が自己判定: 1回目は深掘り質問のみ（ask）、
+  2回目以降で AI 応答保存＋subtask.proposal イベント配信（propose。§1.6 / §4.4）
 SSE はバス購読（tests/helpers.drain_events）で検証する。
 """
 
@@ -26,6 +27,12 @@ GREETING_GENERIC = (
 CHAT_FOLLOWUP = (
     "ありがとうございます、イメージできました。"
     "いただいた前提をふまえ、次のように分解するのはいかがでしょう。"
+)
+# 深掘りエージェントの1回目の質問（#27 ask。分解はまだ提案しない）
+DEEP_DIVE_QUESTION = (
+    "ありがとうございます。もう少しだけ深掘りさせてください。\n"
+    "この成果物はどんな場面で使われますか？また、絶対に外せない要素が"
+    "あれば教えてください。"
 )
 
 # 分解候補（T-130 は §2.5 の5件 / その他は汎用4件）
@@ -140,10 +147,13 @@ async def test_start_chat_task_not_found(api_client: httpx.AsyncClient) -> None:
 # ---- sendChat ---------------------------------------------------------------------
 
 
-async def test_send_chat_returns_human_message_then_ai_reply_and_proposal(
+async def test_send_chat_first_reply_asks_deep_dive_question_without_proposal(
     api_client: httpx.AsyncClient, event_queue, no_delay
 ) -> None:
-    """T-130: 人メッセージ即返却 → drain 後 AI 応答保存＋subtask.proposal（§2.5 の5件）。"""
+    """T-130: 人の1回目の発言 → 深掘りエージェントが ask を自己選択（#27）。
+
+    質問のみ chat.message.created で配信し、subtask.proposal は配信しない。
+    """
     await api_client.post("/api/tasks/T-130/chat/start")
     drain_events(event_queue)
 
@@ -162,13 +172,40 @@ async def test_send_chat_returns_human_message_then_ai_reply_and_proposal(
     assert [(r["author"], r["text"]) for r in rows] == [
         ("ai", GREETING_T130),
         ("human", "秋頃公開。実績は直近の3件を見せたい。"),
-        ("ai", CHAT_FOLLOWUP),
+        ("ai", DEEP_DIVE_QUESTION),
     ]
 
     events = drain_events(event_queue)
     assert [e["type"] for e in events] == [
         "chat.message.created",  # 人メッセージ（即時）
-        "chat.message.created",  # AI 応答（バックグラウンド）
+        "chat.message.created",  # 深掘り質問（ask。proposal は配信されない #27）
+    ]
+    assert events[1]["payload"]["author"] == "ai"
+    assert events[1]["payload"]["text"] == DEEP_DIVE_QUESTION
+
+
+async def test_send_chat_second_reply_proposes_subtasks(
+    api_client: httpx.AsyncClient, event_queue, no_delay
+) -> None:
+    """T-130: 2回目の発言で「情報は十分」と自己判定 → AI応答＋subtask.proposal（§2.5 の5件）。"""
+    await api_client.post("/api/tasks/T-130/chat/start")
+    await api_client.post(
+        "/api/tasks/T-130/chat", json={"text": "秋頃公開。実績は直近の3件を見せたい。"}
+    )
+    await chat_router.drain_chat_replies()
+    drain_events(event_queue)
+
+    res = await api_client.post(
+        "/api/tasks/T-130/chat", json={"text": "転職活動で使います。実績3件は外せません。"}
+    )
+    assert res.status_code == 201
+
+    await chat_router.drain_chat_replies()
+
+    events = drain_events(event_queue)
+    assert [e["type"] for e in events] == [
+        "chat.message.created",  # 人メッセージ（即時）
+        "chat.message.created",  # AI 応答（propose）
         "subtask.proposal",
     ]
     assert events[1]["payload"]["author"] == "ai"
@@ -193,10 +230,20 @@ async def test_send_chat_returns_human_message_then_ai_reply_and_proposal(
 async def test_send_chat_generic_proposal(
     api_client: httpx.AsyncClient, event_queue, no_delay
 ) -> None:
-    """T-130 以外は汎用4件の分解候補が配信される。"""
+    """T-130 以外も同様: 1回目は深掘り質問、2回目で汎用4件の分解候補が配信される。"""
     res = await api_client.post("/api/tasks/T-104/chat", json={"text": "進め方を相談したい"})
     assert res.status_code == 201
+    await chat_router.drain_chat_replies()
+    events = drain_events(event_queue)
+    assert [e["type"] for e in events] == [
+        "chat.message.created",
+        "chat.message.created",  # 深掘り質問のみ（ask）
+    ]
 
+    res = await api_client.post(
+        "/api/tasks/T-104/chat", json={"text": "対象は主要5社。料金と機能を比較したい"}
+    )
+    assert res.status_code == 201
     await chat_router.drain_chat_replies()
 
     events = drain_events(event_queue)
@@ -217,7 +264,7 @@ async def test_send_chat_task_not_found(api_client: httpx.AsyncClient) -> None:
 async def test_get_chat_messages_in_created_order(
     api_client: httpx.AsyncClient, no_delay
 ) -> None:
-    """一覧は created_at 昇順（greeting → 人 → AI 応答）。"""
+    """一覧は created_at 昇順（greeting → 人 → 深掘り質問 #27）。"""
     assert (await api_client.get("/api/tasks/T-130/chat")).json() == []
 
     await api_client.post("/api/tasks/T-130/chat/start")
@@ -230,7 +277,7 @@ async def test_get_chat_messages_in_created_order(
     assert [(m["author"], m["text"]) for m in messages] == [
         ("ai", GREETING_T130),
         ("human", "前提を共有します"),
-        ("ai", CHAT_FOLLOWUP),
+        ("ai", DEEP_DIVE_QUESTION),
     ]
     # ChatMessage DTO は camelCase
     assert {"id", "taskId", "author", "text", "createdAt"} <= set(messages[0].keys())
