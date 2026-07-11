@@ -30,6 +30,7 @@ from app.domain.dto import (
     TaskCreate,
 )
 from app.domain.models import (
+    AgentRole,
     Author,
     ChatMessage,
     Comment,
@@ -251,7 +252,11 @@ async def confirm_breakdown(
                 first_ai_comment = await comments_repo.create_comment(
                     conn,
                     child_row,
-                    CommentCreate(author=Author.AI, text=FIRST_AI_START_COMMENT),
+                    CommentCreate(
+                        author=Author.AI,
+                        text=FIRST_AI_START_COMMENT,
+                        agent_role=AgentRole.PLANNER,  # 分解の反映は計画AIの名義（#19）
+                    ),
                 )
                 child = await tasks_repo.apply_patch(conn, child_row, {"progress": 10})
             children.append(child)
@@ -260,7 +265,11 @@ async def confirm_breakdown(
         parent_comment = await comments_repo.create_comment(
             conn,
             row,
-            CommentCreate(author=Author.AI, text=_confirm_comment_text(len(children))),
+            CommentCreate(
+                author=Author.AI,
+                text=_confirm_comment_text(len(children)),
+                agent_role=AgentRole.PLANNER,  # 分解の反映は計画AIの名義（#19）
+            ),
         )
         parent = await tasks_repo.apply_patch(
             conn,

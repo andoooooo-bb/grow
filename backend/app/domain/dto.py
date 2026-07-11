@@ -6,6 +6,8 @@
 from pydantic import Field
 
 from app.domain.models import (
+    AgentRole,
+    AiJob,
     Artifact,
     Author,
     CamelModel,
@@ -62,6 +64,8 @@ class CommentCreate(CamelModel):
     author: Author
     author_user_id: str | None = None  # human のとき
     text: str
+    # AIコメントの役割バッジ（#19）。省略時 null = 役割なし
+    agent_role: AgentRole | None = None
 
 
 class ChatMessageCreate(CamelModel):
@@ -117,6 +121,13 @@ class AssignAiResponse(CamelModel):
     """POST /tasks/:id/assign-ai の応答（enqueue したジョブの ID）。"""
 
     job_id: str
+
+
+class JobsResponse(CamelModel):
+    """GET /tasks/:id/jobs（#19 リレー・タイムライン。created_at 昇順 = リレー履歴）。"""
+
+    task_id: str
+    jobs: list[AiJob]
 
 
 class JobRunRequest(CamelModel):

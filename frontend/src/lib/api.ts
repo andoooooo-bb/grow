@@ -9,6 +9,7 @@ import type {
   BreakdownConfirmResponse,
   ChatSendRequest,
   CommentCreate,
+  JobsResponse,
   LearnDecisionRequest,
   RuleProposalDto,
   TaskCreate,
@@ -126,6 +127,11 @@ export function confirmBreakdown(
 /** 成果物の全版を version 昇順で取得する（#10。末尾が最新）。 */
 export function getArtifacts(taskId: string): Promise<ArtifactResponse> {
   return request<ArtifactResponse>(`/api/tasks/${taskId}/artifacts`);
+}
+
+/** AIジョブ履歴を createdAt 昇順で取得する（#19 リレー・タイムライン）。 */
+export function getJobs(taskId: string): Promise<JobsResponse> {
+  return request<JobsResponse>(`/api/tasks/${taskId}/jobs`);
 }
 
 /** 人の編集を新版として保存する（#10 §00 #12）。作成された Artifact（201）を返す。 */

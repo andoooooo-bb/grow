@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException
 
 from app.db import get_pool
 from app.domain.dto import AssignAiResponse, CommentCreate
-from app.domain.models import Author, LaneKey, TaskStatus
+from app.domain.models import AgentRole, Author, LaneKey, TaskStatus
 from app.domain.state_machine import can_transition
 from app.events import COMMENT_CREATED, RULE_UPDATED, TASK_UPDATED, publish_event
 from app.jobs import queue as jobs_queue
@@ -53,8 +53,15 @@ async def assign_ai(human_id: str) -> AssignAiResponse:
         rule_rows = await rules_repo.relevant_rules(conn, row)
 
         # 3) 着手コメント（先に挿入し、後続の Task DTO に commentCount を反映させる）
+        # 着手〜完了は実行AIの担当（#19 役割バッジ）
         comment = await comments_repo.create_comment(
-            conn, row, CommentCreate(author=Author.AI, text=_start_comment_text(rule_rows))
+            conn,
+            row,
+            CommentCreate(
+                author=Author.AI,
+                text=_start_comment_text(rule_rows),
+                agent_role=AgentRole.EXECUTOR,
+            ),
         )
 
         # 4) 適用ルールの applied++ / last_applied_at / rule_applications（§6.3）

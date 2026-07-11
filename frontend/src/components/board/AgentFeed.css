@@ -1,0 +1,98 @@
+/* AI活動ライブフィード（#19）: トップバー右上のドロップダウンパネル */
+.agent-feed {
+  position: relative;
+}
+
+/* ピルを button 化したときのリセット（見た目は topbar__pill--ai を継承） */
+.agent-feed__toggle {
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+/* 右上固定パネル: 白面・radius 10px・オーバーレイ級の影・msgin で出現 */
+.agent-feed__panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 60;
+  width: 320px;
+  max-height: 60vh;
+  overflow-y: auto;
+  background: var(--color-surface);
+  border: 1px solid var(--color-card-border);
+  border-radius: 10px;
+  box-shadow: 0 18px 50px rgba(20, 24, 40, 0.22);
+  padding: 12px;
+  animation: var(--anim-msgin);
+}
+
+/* 見出し 11px/700 #7a818b（セクション見出し規格 §04） */
+.agent-feed__heading {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--color-text-secondary);
+  letter-spacing: 0.04em;
+  margin-bottom: 8px;
+}
+
+/* 空状態 */
+.agent-feed__empty {
+  font-size: 12px;
+  color: var(--color-text-weak);
+  padding: 14px 4px 8px;
+  text-align: center;
+}
+
+.agent-feed__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* フィード行（クリックで該当カードへ）: msgin・hover #fafbfc */
+.agent-feed__row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 7px 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  animation: var(--anim-msgin);
+}
+
+.agent-feed__row:hover {
+  background: var(--color-surface-soft);
+}
+
+.agent-feed__row-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* タスクID（mono 10px） */
+.agent-feed__task {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-text-weakest);
+}
+
+/* 時刻（mono 9.5px, 右端） */
+.agent-feed__time {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--color-text-meta);
+}
+
+/* 本文 12px #3a3f48 */
+.agent-feed__text {
+  font-size: 12px;
+  color: var(--color-text-body);
+  line-height: 1.5;
+}

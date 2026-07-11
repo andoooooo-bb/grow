@@ -19,7 +19,7 @@ from fastapi import APIRouter, HTTPException, Response
 from app.ai import get_provider
 from app.db import get_pool
 from app.domain.dto import CommentCreate, LearnDecisionRequest, RuleProposalDto
-from app.domain.models import Author, Rule, RuleScope, TaskStatus
+from app.domain.models import AgentRole, Author, Rule, RuleScope, TaskStatus
 from app.events import (
     COMMENT_CREATED,
     RULE_CREATED,
@@ -122,7 +122,9 @@ async def adopt_learn(human_id: str, payload: LearnDecisionRequest) -> Rule:
             conn,
             row,
             CommentCreate(
-                author=Author.AI, text=ADOPT_COMMENT_TEMPLATE.format(text=payload.text)
+                author=Author.AI,
+                text=ADOPT_COMMENT_TEMPLATE.format(text=payload.text),
+                agent_role=AgentRole.DISTILLER,  # 蒸留の採用は学習AIの名義（#19）
             ),
         )
         task = await tasks_repo.task_from_row(conn, row)  # commentCount 同期用（#7）

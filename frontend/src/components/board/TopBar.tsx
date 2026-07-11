@@ -1,17 +1,17 @@
 // トップバー（§3.1）: ロゴ・ワークスペース表示と、派生カウンタ（§5.1）のピル群。
 // youCount = owner human かつ status≠done / aiCount = ai_work or queued / ruleCount = rules 総数
+// 「AI稼働」ピルは #19 で button 化し、AI活動ライブフィード（AgentFeed）のトグルになった。
 
 import {
-  deriveAiCount,
   deriveRuleCount,
   deriveYouCount,
   useBoardStore,
 } from '../../store/board.ts';
+import { AgentFeed } from './AgentFeed';
 import './TopBar.css';
 
 export function TopBar() {
   const youCount = useBoardStore((s) => deriveYouCount(s.cards));
-  const aiCount = useBoardStore((s) => deriveAiCount(s.cards));
   const ruleCount = useBoardStore((s) => deriveRuleCount(s.rules));
   const openKnowledge = useBoardStore((s) => s.openKnowledge);
   // #20: ルール適用の瞬間に「◈ ナレッジ」を明滅させる（最新の適用時刻で one-shot 再生）
@@ -34,10 +34,8 @@ export function TopBar() {
           <span className="topbar__pill-dot topbar__pill-dot--you" aria-hidden="true" />
           あなたの番 {youCount}
         </span>
-        <span className="topbar__pill topbar__pill--ai">
-          <span className="topbar__pill-dot topbar__pill-dot--ai" aria-hidden="true" />
-          AI稼働 {aiCount}
-        </span>
+        {/* #19: 「AI稼働 N」ピル＋ライブフィードのドロップダウン */}
+        <AgentFeed />
         <button
           // #20: 適用時刻を key に使い、適用のたび明滅アニメを再マウントで再生する
           key={flashStamp ?? 'static'}

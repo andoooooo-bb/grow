@@ -66,6 +66,20 @@ class AiJobKind(StrEnum):
     DISTILL = "distill"
 
 
+class AgentRole(StrEnum):
+    """AIコメントの役割バッジ（#19 エージェント編成の見える化）。
+
+    後続エージェント（#22 指揮者 / #23 レビュー）はここに値を足すだけで
+    コメント役割バッジ（FE の AGENT_ROLE_META と鏡写し）に乗る。
+    """
+
+    PLANNER = "planner"  # 計画AI（壁打ち・分解・初期質問）
+    EXECUTOR = "executor"  # 実行AI（着手・進捗・完了・失敗）
+    REVIEWER = "reviewer"  # レビューAI（#23）
+    DISTILLER = "distiller"  # 学習AI（蒸留の採用）
+    CONDUCTOR = "conductor"  # 指揮者AI（#22）
+
+
 class AiJobStatus(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
@@ -133,6 +147,8 @@ class Comment(CamelModel):
     author: Author
     author_user_id: str | None = None  # human のとき
     text: str
+    # AIコメントの役割バッジ（#19）。null = 役割なし（従来通り「Grow」のみ表示）
+    agent_role: AgentRole | None = None
     created_at: str
 
 

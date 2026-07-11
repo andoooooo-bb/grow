@@ -404,7 +404,7 @@ describe('addCard（#8: §5.3）', () => {
 
     await useBoardStore.getState().addCard('backlog');
 
-    // 呼び出し内容（status 省略時 breakdown / AIコメント文言）
+    // 呼び出し内容（status 省略時 breakdown / AIコメント文言。#19: 初期質問は計画AI名義）
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
       laneKey: 'backlog',
       title: '新しいタスク',
@@ -412,6 +412,7 @@ describe('addCard（#8: §5.3）', () => {
     expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
       author: 'ai',
       text: 'タイトルと、やりたいことを教えてください。大きければ壁打ちで分解しましょう。',
+      agentRole: 'planner',
     });
 
     // ストア反映: カード追加（当該レーン末尾）＋コメント＋ドロワーを開く

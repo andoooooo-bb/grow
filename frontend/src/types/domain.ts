@@ -23,6 +23,33 @@ export type Confidence = 'high' | 'med' | 'low';
 export type AiJobKind = 'execute' | 'breakdown' | 'distill';
 export type AiJobStatus = 'queued' | 'running' | 'succeeded' | 'failed';
 
+// AIコメントの役割バッジ（#19 エージェント編成の見える化）。
+// backend/app/domain/models.py の AgentRole と鏡写し。
+export type AgentRole =
+  | 'planner' // 計画AI（壁打ち・分解・初期質問）
+  | 'executor' // 実行AI（着手・進捗・完了・失敗）
+  | 'reviewer' // レビューAI（#23）
+  | 'distiller' // 学習AI（蒸留の採用）
+  | 'conductor'; // 指揮者AI（#22）
+
+// 役割 → 表示ラベル。色は CSS（agent-badge--{role} 等）が持つ:
+// 計画/学習=パープル・実行=ティール・レビュー=アンバー・指揮者=ダーク（§04）
+export const AGENT_ROLE_META = {
+  planner: { label: '計画AI' },
+  executor: { label: '実行AI' },
+  reviewer: { label: 'レビューAI' },
+  distiller: { label: '学習AI' },
+  conductor: { label: '指揮者AI' },
+} as const satisfies Record<AgentRole, { label: string }>;
+
+// ジョブ種別 → 担当役割（#19 リレー・タイムライン）。
+// 後続エージェント（#22/#23）は AiJobKind と本対応に1行足すだけでタイムラインに乗る
+export const JOB_KIND_ROLE = {
+  breakdown: 'planner',
+  execute: 'executor',
+  distill: 'distiller',
+} as const satisfies Record<AiJobKind, AgentRole>;
+
 // ---- STATUS_META ----
 export interface StatusMeta {
   label: string;
@@ -73,6 +100,8 @@ export interface Comment {
   author: Author; // 'ai' | 'human'
   authorUserId?: string; // human のとき
   text: string;
+  // AIコメントの役割バッジ（#19）。null/未指定 = 従来通り「Grow」のみ表示
+  agentRole?: AgentRole | null;
   createdAt: string;
 }
 

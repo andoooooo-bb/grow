@@ -26,7 +26,7 @@ import asyncpg
 from app.ai import get_provider
 from app.db import get_pool
 from app.domain.dto import CommentCreate
-from app.domain.models import AiJobStatus, Author, LaneKey, TaskStatus
+from app.domain.models import AgentRole, AiJobStatus, Author, LaneKey, TaskStatus
 from app.domain.state_machine import can_transition
 from app.events import ARTIFACT_CREATED, COMMENT_CREATED, TASK_UPDATED, publish_event
 from app.repo import ai_jobs as ai_jobs_repo
@@ -129,7 +129,13 @@ async def _execute_attempt(job_id: str) -> None:
             async with conn.transaction():
                 row = await tasks_repo.get_task_row(conn, task_row["human_id"], for_update=True)
                 comment = await comments_repo.create_comment(
-                    conn, row, CommentCreate(author=Author.AI, text=PROGRESS_COMMENT)
+                    conn,
+                    row,
+                    CommentCreate(
+                        author=Author.AI,
+                        text=PROGRESS_COMMENT,
+                        agent_role=AgentRole.EXECUTOR,  # 進捗は実行AIの名義（#19）
+                    ),
                 )
                 task = await tasks_repo.apply_patch(
                     conn, row, {"progress": INTERMEDIATE_PROGRESS}
@@ -159,7 +165,13 @@ async def _execute_attempt(job_id: str) -> None:
                 )
             artifact = await create_artifact(conn, row, result.content_md, job_id=job_id)
             comment = await comments_repo.create_comment(
-                conn, row, CommentCreate(author=Author.AI, text=COMPLETE_COMMENT)
+                conn,
+                row,
+                CommentCreate(
+                    author=Author.AI,
+                    text=COMPLETE_COMMENT,
+                    agent_role=AgentRole.EXECUTOR,  # 完了ハンドオフも実行AIの名義（#19）
+                ),
             )
             # §5.6 不変条件: ai_work 以外では progress は null
             task = await tasks_repo.apply_patch(
@@ -206,7 +218,9 @@ async def _handle_final_failure(job_id: str, error: Exception) -> None:
                 conn,
                 row,
                 CommentCreate(
-                    author=Author.AI, text=FAILURE_COMMENT_TEMPLATE.format(reason=reason)
+                    author=Author.AI,
+                    text=FAILURE_COMMENT_TEMPLATE.format(reason=reason),
+                    agent_role=AgentRole.EXECUTOR,  # 失敗ハンドオフも実行AIの名義（#19）
                 ),
             )
             fields: dict[str, Any] = {}

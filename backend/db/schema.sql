@@ -57,6 +57,9 @@ create table comments (
   author text not null,             -- 'ai' | 'human'
   author_user_id uuid references users(id),
   text text not null,
+  -- AIコメントの役割バッジ（#19）: 'planner'|'executor'|'reviewer'|'distiller'|'conductor'。
+  -- null = 役割なし（human コメント・旧AIコメントは従来通り「Grow」表示）
+  agent_role text,
   created_at timestamptz not null default now()
 );
 create index on comments (task_id, created_at);

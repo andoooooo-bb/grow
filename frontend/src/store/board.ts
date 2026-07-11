@@ -13,6 +13,7 @@ import {
   dismissLearn as dismissLearnRequest,
   getArtifacts,
   getComments,
+  getJobs,
   getLearnProposals,
   patchTask,
   promoteRule as promoteRuleRequest,
@@ -28,6 +29,8 @@ import type {
   TaskPatch,
 } from '../types/api.ts';
 import type {
+  AgentRole,
+  AiJob,
   Artifact,
   ChatMessage,
   Comment,
@@ -40,6 +43,19 @@ import type {
 import { STATUS_META } from '../types/domain.ts';
 
 export type PanelMode = 'detail' | 'chat';
+
+/** #19 ライブフィードの1行（AI活動の横断ログ。上限 ACTIVITY_LIMIT のリングバッファ） */
+export interface ActivityEntry {
+  id: string; // 由来イベントごとに安定なID（comment-{id} 等。重複配信の排除に使う）
+  taskId: string; // 行クリックで select(taskId) するジャンプ先
+  taskTitle: string; // 表示用（積んだ時点のタイトル）
+  text: string; // 例「成果物v2を作成」「あなたのレビュー待ちへ」
+  role?: AgentRole; // どのエージェントの活動か（不明なら undefined）
+  at: number; // 積んだ時刻（ms）
+}
+
+/** #19 ライブフィードの保持上限（最新100件のリングバッファ） */
+export const ACTIVITY_LIMIT = 100;
 
 /** §2.3 フロント状態ストア形（正規化） */
 export interface BoardState {
@@ -69,6 +85,10 @@ export interface BoardState {
   // 消費側（AppliedRules/KnowledgeOverlay/TopBar）は値を key に使い、変わるたび
   // one-shot CSS アニメを再マウントで再生する（数秒で自然に減衰。クリア不要）。
   justApplied: Record<string, number>;
+  // #19: AI活動ライブフィード（新しい順・上限 ACTIVITY_LIMIT）。SSE 起点の apply* が積む
+  activity: ActivityEntry[];
+  // #19: taskId -> AIジョブ履歴（createdAt 昇順）。ドロワーのリレー・タイムラインが読む
+  jobs: Record<string, AiJob[]>;
 }
 
 export interface BoardActions {
@@ -127,6 +147,12 @@ export interface BoardActions {
   loadArtifacts: (taskId: string) => Promise<void>;
   /** POST /tasks/:id/artifacts で編集内容を新版として保存する。成功で true */
   saveArtifact: (taskId: string, contentMd: string) => Promise<boolean>;
+
+  // ---- エージェント編成の見える化（#19） ----
+  /** GET /tasks/:id/jobs でリレー履歴を読み込む（AgentTimeline が呼ぶ）。失敗は非表示のまま */
+  loadJobs: (taskId: string) => Promise<void>;
+  /** ライブフィードへ1行積む（新しい順・上限 ACTIVITY_LIMIT。同一 id は重複排除） */
+  pushActivity: (entry: ActivityEntry) => void;
 
   // ---- 壁打ち → 分解（#12 / §1.6 / §5.3） ----
   /**
@@ -218,6 +244,8 @@ export function createInitialBoardState(): BoardState {
     confirming: {},
     learning: {},
     justApplied: {},
+    activity: [],
+    jobs: {},
   };
 }
 
@@ -255,6 +283,20 @@ function upsertRule(rules: Rule[], rule: Rule): Rule[] {
   const next: Rule = { ...rule, isNew: rule.isNew ?? existing.isNew };
   return rules.map((r) => (r.id === rule.id ? next : r));
 }
+
+// ---- #19 ライブフィードのヘルパ ----------------------------------------------------
+
+/** フィード行のAIコメント要約（先頭30字。超過は…付き） */
+export const ACTIVITY_TEXT_LIMIT = 30;
+
+function summarizeActivityText(text: string): string {
+  return text.length > ACTIVITY_TEXT_LIMIT
+    ? `${text.slice(0, ACTIVITY_TEXT_LIMIT)}…`
+    : text;
+}
+
+// ステータス変化エントリの一意ID用の連番（同一タスクの再遷移も別行として積む）
+let activitySeq = 0;
 
 /** cards[taskId].commentCount を delta 分ずらす（カードが無ければ何もしない） */
 function shiftCommentCount(
@@ -433,6 +475,7 @@ export const useBoardStore = create<BoardStore>()((set, get) => ({
       const comment = await createComment(created.id, {
         author: 'ai',
         text: ADD_CARD_AI_PROMPT,
+        agentRole: 'planner', // 初期質問は計画AIの名義（#19）
       });
       get().addCommentOptimistic(created.id, comment); // スレッド反映＋commentCount+1
     } catch {
@@ -503,6 +546,23 @@ export const useBoardStore = create<BoardStore>()((set, get) => ({
       return false;
     }
   },
+
+  // ---- エージェント編成の見える化（#19） ----
+  loadJobs: async (taskId) => {
+    try {
+      const res = await getJobs(taskId);
+      if (!Array.isArray(res.jobs)) return; // 予期しない応答は無視（タイムライン非表示のまま）
+      set((s) => ({ jobs: { ...s.jobs, [taskId]: res.jobs } }));
+    } catch {
+      // 取得失敗はタイムライン非表示のまま（§5.5: ジョブなしと同じ扱い。文言は出さない）
+    }
+  },
+  pushActivity: (entry) =>
+    set((s) => {
+      // 同一 id は重複排除（POST 応答と SSE の二重適用・SSE 再配信への冪等ガード）
+      if (s.activity.some((e) => e.id === entry.id)) return {};
+      return { activity: [entry, ...s.activity].slice(0, ACTIVITY_LIMIT) };
+    }),
 
   // ---- 壁打ち → 分解（#12 / §1.6 / §5.3） ----
   startChat: async (taskId) => {
@@ -670,7 +730,8 @@ export const useBoardStore = create<BoardStore>()((set, get) => ({
   },
 
   // ---- SSE 適用（#7 / #10 / #12） ----
-  applyTaskUpdated: (task) =>
+  applyTaskUpdated: (task) => {
+    const prev = get().cards[task.id];
     set((s) => {
       const lanes = s.lanes.map((lane) => {
         const without = lane.cardIds.filter((id) => id !== task.id);
@@ -685,8 +746,20 @@ export const useBoardStore = create<BoardStore>()((set, get) => ({
         };
       });
       return { cards: { ...s.cards, [task.id]: task }, lanes };
-    }),
-  applyCommentCreated: (comment) =>
+    });
+    // #19 ライブフィード: ステータスが変わった瞬間だけ積む（差し替えのみでは積まない）
+    if (prev !== undefined && prev.status !== task.status) {
+      activitySeq += 1;
+      get().pushActivity({
+        id: `status-${task.id}-${activitySeq}`,
+        taskId: task.id,
+        taskTitle: task.title,
+        text: `${STATUS_META[task.status].label}へ`,
+        at: Date.now(),
+      });
+    }
+  },
+  applyCommentCreated: (comment) => {
     set((s) => {
       const list = s.comments[comment.taskId];
       // 未読込のタスクは何もしない（ドロワーを開いたとき GET で取得する）。
@@ -703,8 +776,20 @@ export const useBoardStore = create<BoardStore>()((set, get) => ({
           ? list.map((c, i) => (i === pendingIndex ? comment : c))
           : [...list, comment];
       return { comments: { ...s.comments, [comment.taskId]: next } };
-    }),
-  applyArtifactCreated: (artifact) =>
+    });
+    // #19 ライブフィード: AIコメントは未読込タスクでも横断ログに積む（要約30字。id で冪等）
+    if (comment.author === 'ai') {
+      get().pushActivity({
+        id: `comment-${comment.id}`,
+        taskId: comment.taskId,
+        taskTitle: get().cards[comment.taskId]?.title ?? '',
+        text: summarizeActivityText(comment.text),
+        role: comment.agentRole ?? undefined,
+        at: Date.now(),
+      });
+    }
+  },
+  applyArtifactCreated: (artifact) => {
     set((s) => {
       const list = s.artifacts[artifact.taskId] ?? [];
       // id 重複排除（自分の POST 応答と SSE の二重適用を防ぐ）
@@ -712,7 +797,17 @@ export const useBoardStore = create<BoardStore>()((set, get) => ({
       // version 昇順（末尾が最新）を維持して追記
       const next = [...list, artifact].sort((a, b) => a.version - b.version);
       return { artifacts: { ...s.artifacts, [artifact.taskId]: next } };
-    }),
+    });
+    // #19 ライブフィード: 版の作成を積む（AI生成=実行AI名義 / 人の編集版=名義なし）
+    get().pushActivity({
+      id: `artifact-${artifact.id}`,
+      taskId: artifact.taskId,
+      taskTitle: get().cards[artifact.taskId]?.title ?? '',
+      text: `成果物v${artifact.version}を作成`,
+      role: artifact.jobId != null ? 'executor' : undefined,
+      at: Date.now(),
+    });
+  },
   applyChatMessageCreated: (message) =>
     set((s) => {
       const list = s.chat[message.taskId];
@@ -734,7 +829,21 @@ export const useBoardStore = create<BoardStore>()((set, get) => ({
     set((s) => ({
       proposal: { ...s.proposal, [event.taskId]: event.subtasks },
     })),
-  applyRuleCreated: (rule) => set((s) => ({ rules: upsertRule(s.rules, rule) })),
+  applyRuleCreated: (rule) => {
+    set((s) => ({ rules: upsertRule(s.rules, rule) }));
+    // #19 ライブフィード: 学習AIのルール獲得を積む（adopt 応答先着でも id で一本化）
+    get().pushActivity({
+      id: `rule-${rule.id}`,
+      taskId: rule.sourceTaskId ?? '',
+      taskTitle:
+        rule.sourceTaskId != null
+          ? (get().cards[rule.sourceTaskId]?.title ?? '')
+          : '',
+      text: `ルール${rule.id}を学習`,
+      role: 'distiller',
+      at: Date.now(),
+    });
+  },
   applyRuleUpdated: (rule) =>
     set((s) => {
       // #20: applied が増えた（=「AIにまかせる」で注入された）瞬間だけフラッシュを発火

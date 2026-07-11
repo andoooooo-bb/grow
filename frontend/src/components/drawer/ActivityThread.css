@@ -31,6 +31,13 @@
   gap: 3px;
 }
 
+/* 名義行（#19: 名義＋役割ミニバッジを横並び） */
+.activity__meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 /* 名義「{Grow | あなた}」10.5px/600 #8a909a */
 .activity__name {
   font-size: 10.5px;

@@ -29,6 +29,15 @@ def job_from_row(row: asyncpg.Record, task_human_id: str) -> AiJob:
     )
 
 
+async def list_jobs(conn: asyncpg.Connection, task_row: asyncpg.Record) -> list[AiJob]:
+    """タスクのジョブを created_at 昇順で返す（#19 リレー・タイムラインの履歴）。"""
+    rows = await conn.fetch(
+        "select * from ai_jobs where task_id = $1 order by created_at, id",
+        task_row["id"],
+    )
+    return [job_from_row(row, task_row["human_id"]) for row in rows]
+
+
 async def create_job(
     conn: asyncpg.Connection,
     task_row: asyncpg.Record,

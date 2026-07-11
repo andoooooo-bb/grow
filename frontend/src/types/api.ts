@@ -2,6 +2,8 @@
 // §2.3 の正規化ストア形（cards: id辞書 / lanes: cardIds 配列で順序保持）に忠実。
 
 import type {
+  AgentRole,
+  AiJob,
   Artifact,
   Author,
   Confidence,
@@ -53,6 +55,7 @@ export interface CommentCreate {
   author: Author;
   authorUserId?: string; // human のとき
   text: string;
+  agentRole?: AgentRole; // AIコメントの役割バッジ（#19。省略時 null）
 }
 
 // POST /tasks/:id/chat
@@ -107,6 +110,12 @@ export interface ArtifactCreate {
 // POST /tasks/:id/assign-ai の応答（202: enqueue したジョブの ID）
 export interface AssignAiResponse {
   jobId: string;
+}
+
+// GET /tasks/:id/jobs（#19 リレー・タイムライン。createdAt 昇順 = リレー履歴）
+export interface JobsResponse {
+  taskId: string;
+  jobs: AiJob[];
 }
 
 // ---- ルール（ナレッジ） ----

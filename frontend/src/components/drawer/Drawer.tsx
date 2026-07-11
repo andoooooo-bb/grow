@@ -7,6 +7,7 @@ import { useEffect } from 'react';
 import { useBoardStore } from '../../store/board.ts';
 import { ActionBar } from './ActionBar';
 import { ActivityThread } from './ActivityThread';
+import { AgentTimeline } from './AgentTimeline';
 import { AppliedRules } from './AppliedRules';
 import { ArtifactSection } from './ArtifactSection';
 import { ChatMode } from './ChatMode';
@@ -72,6 +73,8 @@ export function Drawer() {
           <ArtifactSection task={task} canAssignAi={canAssignAi} />
           {/* (d) サブタスク（§3.3.2d, #12）: childIds が無ければコンポーネント側で非表示 */}
           <SubtaskSection task={task} />
+          {/* (d-2) リレー・タイムライン（#19）: ジョブ0件時はコンポーネント側で非表示 */}
+          <AgentTimeline task={task} />
           <ActivityThread taskId={task.id} />
           <Composer taskId={task.id} />
         </div>

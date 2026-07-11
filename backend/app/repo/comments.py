@@ -24,6 +24,7 @@ def _row_to_comment(row: asyncpg.Record, task_human_id: str) -> Comment:
             str(row["author_user_id"]) if row["author_user_id"] is not None else None
         ),
         text=row["text"],
+        agent_role=row["agent_role"],
         created_at=row["created_at"].isoformat(),
     )
 
@@ -41,12 +42,13 @@ async def create_comment(
                 f"invalid author_user_id: {data.author_user_id}"
             ) from exc
     row = await conn.fetchrow(
-        "insert into comments (task_id, author, author_user_id, text) "
-        "values ($1, $2, $3, $4) returning *",
+        "insert into comments (task_id, author, author_user_id, text, agent_role) "
+        "values ($1, $2, $3, $4, $5) returning *",
         task_row["id"],
         data.author.value,
         author_user_uuid,
         data.text,
+        data.agent_role.value if data.agent_role is not None else None,
     )
     return _row_to_comment(row, task_row["human_id"])
 
