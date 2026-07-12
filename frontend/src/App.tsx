@@ -10,7 +10,7 @@ import { TopBar } from './components/board/TopBar';
 import { Drawer } from './components/drawer/Drawer';
 import { KnowledgeOverlay } from './components/knowledge/KnowledgeOverlay';
 import { getBoard } from './lib/api.ts';
-import { connectEvents } from './lib/sse.ts';
+import { connectEvents, startPolling } from './lib/sse.ts';
 import { useBoardStore } from './store/board.ts';
 import './styles/tokens.css';
 import './App.css';
@@ -56,8 +56,16 @@ function App() {
       }),
   );
 
-  // SSE 購読（§5.4 / #7）: 起動時に /api/events へ接続、アンマウントで切断
-  useEffect(() => connectEvents(), []);
+  // SSE 購読（§5.4 / #7）＋ ポーリング・フォールバック（本番Cloud RunのSSEバッファ対策）。
+  // 起動時に接続・並走開始、アンマウントで両方停止。
+  useEffect(() => {
+    const stopSse = connectEvents();
+    const stopPoll = startPolling();
+    return () => {
+      stopSse();
+      stopPoll();
+    };
+  }, []);
 
   return (
     <QueryClientProvider client={queryClient}>

@@ -305,3 +305,42 @@ describe('connectEvents（§5.4 / #7）', () => {
     expect(proposal[1].owner).toBe('human');
   });
 });
+
+describe('startPolling（本番SSEバッファ対策のフォールバック）', () => {
+  it('一定間隔で board を取り直し setBoard で反映する（SSE非依存で更新）', async () => {
+    // 初期は空ボード。ポーリングが取得したサーバ状態へ収束することを確認
+    useBoardStore.setState({ ...createInitialBoardState() });
+    const board = boardFixture();
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => board,
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { startPolling } = await import('./sse.ts');
+    const stop = startPolling(50);
+    try {
+      // 1 tick 分待って反映を確認（実タイマー・短間隔）
+      await new Promise((r) => setTimeout(r, 80));
+      const s = useBoardStore.getState();
+      expect(fetchMock).toHaveBeenCalledWith('/api/board', undefined);
+      expect(Object.keys(s.cards).length).toBe(11);
+      expect(s.lanes).toHaveLength(5);
+    } finally {
+      stop();
+    }
+  });
+
+  it('停止後は board を取り直さない', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => boardFixture() }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { startPolling } = await import('./sse.ts');
+    const stop = startPolling(50);
+    await new Promise((r) => setTimeout(r, 80));
+    const callsBeforeStop = fetchMock.mock.calls.length;
+    stop();
+    await new Promise((r) => setTimeout(r, 120));
+    expect(fetchMock.mock.calls.length).toBe(callsBeforeStop);
+  });
+});

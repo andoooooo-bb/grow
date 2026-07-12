@@ -26,6 +26,12 @@ async def stream_events(
 
     async def generator() -> AsyncIterator[dict[str, Any]]:
         try:
+            # 接続確立を即座に1イベント流す。Cloud Run / GFE は本文の最初の1バイトが
+            # 届くまでレスポンスヘッダをクライアントへ転送しないため、これが無いと
+            # queue.get() でブロックしている間ストリームが確立せず EventSource が
+            # onopen しない（本番で SSE が沈黙し AI 更新が画面に出ない原因だった）。
+            # FE は既知の event 種別のみ addEventListener で購読するため "ready" は無視される。
+            yield {"event": "ready", "data": "{}"}
             sent = 0
             while max_events is None or sent < max_events:
                 event = await queue.get()
@@ -37,4 +43,11 @@ async def stream_events(
         finally:
             bus.unsubscribe(queue)
 
-    return EventSourceResponse(generator())
+    # ping=10: 10秒ごとにコメント行を送り、アイドル中も接続を温め続ける
+    # （プロキシのアイドルタイムアウト対策 ＋ 途中経路のバッファを定期的に flush）。
+    # headers: プロキシのバッファリングを明示的に無効化する。
+    return EventSourceResponse(
+        generator(),
+        ping=10,
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+    )
