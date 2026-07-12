@@ -33,6 +33,7 @@ from app.domain.models import (
 )
 from app.domain.state_machine import can_transition
 from app.events import COMMENT_CREATED, RULE_UPDATED, TASK_UPDATED, publish_event
+from app.guard import guard_ai_action
 from app.jobs import queue as jobs_queue
 from app.jobs.orchestrate import TAKEOVER_COMMENT
 from app.repo import ai_jobs as ai_jobs_repo
@@ -127,6 +128,8 @@ async def assign_ai(human_id: str) -> AssignAiResponse:
     pool = await get_pool()
     capped = None  # コスト上限到達時の (comment, task, spent, cap)（#21）
     async with pool.acquire() as conn:
+        # #security: 全体の1日予算＋レート（#21 のタスク別上限とは別レイヤー）。enqueue 前。
+        await guard_ai_action(conn)
         async with conn.transaction():
             row = await tasks_repo.get_task_row(conn, human_id, for_update=True)
             if row is None:
@@ -215,6 +218,8 @@ async def reject(human_id: str, payload: RejectRequest) -> AssignAiResponse:
 
     # 1) 遷移検証 ＋ 理由コメントの保存（先にコミットして SSE で見せる）
     async with pool.acquire() as conn:
+        # #security: reject も execute を再 enqueue するため（AI 起動）ガードする
+        await guard_ai_action(conn)
         async with conn.transaction():
             row = await tasks_repo.get_task_row(conn, human_id, for_update=True)
             if row is None:
@@ -341,6 +346,8 @@ async def autopilot(human_id: str) -> AssignAiResponse:
     pool = await get_pool()
     capped = None  # コスト上限到達時の (comment, task, spent, cap)（#21 と同型）
     async with pool.acquire() as conn:
+        # #security: 指揮者エージェント（orchestrate）を起動するためガードする
+        await guard_ai_action(conn)
         async with conn.transaction():
             row = await tasks_repo.get_task_row(conn, human_id, for_update=True)
             if row is None:

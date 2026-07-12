@@ -42,6 +42,20 @@ def _recreate_test_db() -> str | None:
     return None
 
 
+@pytest.fixture(autouse=True)
+def _reset_ai_guard_rate():
+    """各テストの前に AI 利用ガードのレートウィンドウ（プロセス内 deque）を空にする。
+
+    _rate_events はモジュールグローバルで全テストを跨いで累積するため、リセットしないと
+    スイート全体（>30 回の AI 起動）で ai_rate_max に達し 429 が出て既存テストが落ちる。
+    予算ガード（DB 集計）は api_client の truncate で自然にリセットされる。
+    """
+    from app.guard import reset_rate_state
+
+    reset_rate_state()
+    yield
+
+
 @pytest.fixture(scope="session")
 def test_db_url() -> str:
     """セッションで一度だけ grow_test を再作成する（接続不可なら skip）。"""

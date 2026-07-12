@@ -41,6 +41,7 @@ from app.events import (
     TASK_UPDATED,
     publish_event,
 )
+from app.guard import guard_ai_action
 from app.repo import chat as chat_repo
 from app.repo import comments as comments_repo
 from app.repo import rules as rules_repo
@@ -73,6 +74,8 @@ async def learn_proposals(human_id: str) -> list[RuleProposalDto]:
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
+        # #security: 「学ぶ」は読み取り操作だが Gemini（propose_rules）を呼ぶためガードする
+        await guard_ai_action(conn)
         row = await tasks_repo.get_task_row(conn, human_id)
         if row is None:
             raise HTTPException(status_code=404, detail=f"task not found: {human_id}")
