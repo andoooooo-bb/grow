@@ -104,6 +104,14 @@ export function ArtifactSection({ task, canAssignAi }: ArtifactSectionProps) {
           )}
         </div>
       </div>
+      {/* レビュー局面（you_review/reviewing）: 何をすればよいかを明示（レビュー導線） */}
+      {(task.status === 'you_review' || task.status === 'reviewing') && (
+        <p className="artifact__review-guide">
+          これが実行AIの最終成果物です。内容を確認し、問題なければ上部の
+          <strong>「完了にする」</strong>、直したい点があれば
+          <strong>「差し戻す」</strong>（理由を書くとAIが直します）か、下のコメント欄で指示してください。
+        </p>
+      )}
       {/* 複数版 = AIが見直して改善した証跡。差分で変化を確認できることを明示（#20/レビューUX） */}
       {editText === null && artifacts.length > 1 && (
         <p className="artifact__revision-hint">

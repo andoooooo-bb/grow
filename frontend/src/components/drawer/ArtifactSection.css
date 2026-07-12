@@ -330,3 +330,18 @@
   cursor: pointer;
   text-decoration: underline;
 }
+
+/* レビュー導線（you_review/reviewing 時）: 何をすればよいかの案内 */
+.artifact__review-guide {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--color-amber-text2, #b5781f);
+  background: var(--color-amber-bg2, #fcefe0);
+  border: 1px solid var(--color-green-border, #f0d9bf);
+  border-radius: var(--radius-badge, 6px);
+}
+.artifact__review-guide strong {
+  font-weight: 700;
+}

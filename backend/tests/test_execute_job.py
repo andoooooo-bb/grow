@@ -94,7 +94,7 @@ async def test_execute_job_success(
             comments[2]["text"],  # レビュー指摘（下で内容検証）
             "作業を進めています…（途中経過を共有します）",
             "セルフレビューを実施しました。適用ルールに照らして問題ありません。",
-            "完了しました。学習済みのルールに沿って仕上げています。レビューをお願いします。",
+            execute_mod.COMPLETE_COMMENT,
         ]
         assert [c["agent_role"] for c in comments] == [
             "executor",
