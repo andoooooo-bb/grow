@@ -599,18 +599,19 @@ describe('適用ルール・成果物セクションの組み込み（#10: §3.3
     render(<Drawer />);
 
     expect(fetchMock).toHaveBeenCalledWith('/api/tasks/T-091/artifacts', undefined);
-    expect(await screen.findByText('成果物（レポート）')).toBeInTheDocument();
+    // 成果物は会話（アクティビティ）の中にメッセージ「成果物 v1」として出る
+    expect(await screen.findByText('成果物 v1')).toBeInTheDocument();
     expect(
       screen.getByRole('heading', { name: '確定申告サマリー' }),
     ).toBeInTheDocument();
   });
 
-  it('成果物が無ければ成果物セクションを出さない（§3.3.2 c-2）', async () => {
+  it('成果物が無ければ成果物メッセージを出さない', async () => {
     installFetch();
     useBoardStore.getState().select('T-104');
     render(<Drawer />);
     await waitForLoaded('T-104');
 
-    expect(screen.queryByText('成果物（レポート）')).toBeNull();
+    expect(screen.queryByText(/成果物 v/)).toBeNull();
   });
 });
