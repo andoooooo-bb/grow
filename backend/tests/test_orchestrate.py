@@ -218,7 +218,7 @@ async def test_autopilot_breakdown_proposes_and_waits_for_human(
         "comment.created",  # 判断理由
         "task.updated",
         "subtask.proposal",  # 分解候補（サーバ非永続）
-        "comment.created",  # バトンコメント
+        "comment.created",  # 引き継ぎコメント
         "task.updated",
     ]
     proposal = events[2]["payload"]
@@ -241,7 +241,7 @@ async def test_autopilot_breakdown_proposes_and_waits_for_human(
         assert [c["text"] for c in comments] == [
             orchestrate_mod.TAKEOVER_COMMENT,
             REASON_BREAKDOWN,
-            orchestrate_mod.BREAKDOWN_BATON_COMMENT,
+            orchestrate_mod.BREAKDOWN_HANDOFF_COMMENT,
         ]
         assert all(c["agent_role"] == "conductor" for c in comments)
     finally:
@@ -362,7 +362,7 @@ async def test_autopilot_l2_continues_after_review_and_hands_off(
             review_mod.APPROVE_COMMENT,
             execute_mod.COMPLETE_COMMENT,
             REASON_HANDOFF,  # 2周目の判断理由（conductor。hasReview=True → 人へ）
-            orchestrate_mod.HANDOFF_COMMENT,  # バトンコメント（conductor）
+            orchestrate_mod.HANDOFF_COMMENT,  # 引き継ぎコメント（conductor）
         ]
         assert comments[7]["agent_role"] == "conductor"
         assert comments[8]["agent_role"] == "conductor"

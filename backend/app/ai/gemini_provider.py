@@ -109,7 +109,7 @@ DECIDE_NEXT_ACTION_DECLARATION = types.FunctionDeclaration(
                 description=(
                     "hearing=前提の確認質問 / breakdown=サブタスク分解の提案 / "
                     "execute=実行AIへ作業を依頼 / review=レビューAIに成果物を検査させる / "
-                    "handoff_human=人へバトンを渡す / done=これ以上の作業はない"
+                    "handoff_human=人へ引き継ぐ / done=これ以上の作業はない"
                 ),
             ),
             "reason": types.Schema(
@@ -432,7 +432,7 @@ def _decide_next_action_system(task: dict, history: list[dict], rules: list[dict
     child_statuses = task.get("childStatuses") or []
     parts = [
         "あなたは Grow の指揮者エージェントです。タスクの現況を読み、",
-        "計画AI（ヒアリング・分解）・実行AI・レビューAI・人のどこへバトンを渡すべきか、",
+        "計画AI（ヒアリング・分解）・実行AI・レビューAI・人のどこへ引き継ぐべきか、",
         "次のアクションを1つだけ決定します。",
         "",
         "# 判断の原則",

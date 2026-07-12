@@ -112,7 +112,7 @@ class NextActionResult:
     - breakdown: 前提が揃った。サブタスク分解を提案する（反映は人の承認 §1.6）
     - execute: 実行可能。実行AI（execute ジョブ）に作業を任せる
     - review: 成果物はあるがセルフレビュー未実施。レビューAIに検査させる（#23）
-    - handoff_human: AIだけでは進められない。人へバトンを渡す
+    - handoff_human: AIだけでは進められない。人へ引き継ぐ
     - done: これ以上の作業はない（完了扱いは呼び出し側がオートノミーで分岐）
     """
 

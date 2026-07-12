@@ -15,7 +15,7 @@
                         ボードへの反映は人の承認のまま（§1.6 の暴走防止を維持）
        - execute:       assign-ai と同じ準備（retrieval・ai_work 遷移・applied++）の上で
                         既存 execute ジョブを起動し、完了後に続行判定
-       - handoff_human: 人のボール（you_review / you_todo）へ遷移＋バトンコメント
+       - handoff_human: 人のボール（you_review / you_todo）へ遷移＋引き継ぎコメント
        - done:          L3 のみ自動完了。それ以外は you_review で人の承認を待つ
 
 続行判定（execute 完了後）はオートノミー（#21）で分岐する:
@@ -94,7 +94,7 @@ ACTION_LABELS: dict[str, str] = {
     "done": "完了",
 }
 # breakdown: 反映は人の承認のまま（§1.6 暴走防止）
-BREAKDOWN_BATON_COMMENT = (
+BREAKDOWN_HANDOFF_COMMENT = (
     "分解候補を提示しました。内容を確認のうえ、ボードへの反映を承認してください。"
 )
 # handoff_human: 人のボールへ
@@ -304,7 +304,7 @@ async def _act_breakdown(
     """propose_subtasks を生成し subtask.proposal を配信する（サーバ非永続, #11 と同型）。
 
     ボードへの反映（confirmBreakdown）は人の承認のまま = オートパイロットはここで
-    停止して人にバトンを渡す（§1.6 の暴走防止を維持）。
+    停止して人に引き継ぐ（§1.6 の暴走防止を維持）。
     """
     proposal = await get_provider().propose_subtasks(
         _task_prompt_dict(task_row), chat_dicts, rule_dicts
@@ -324,7 +324,7 @@ async def _act_breakdown(
             row,
             CommentCreate(
                 author=Author.AI,
-                text=BREAKDOWN_BATON_COMMENT,
+                text=BREAKDOWN_HANDOFF_COMMENT,
                 agent_role=AgentRole.CONDUCTOR,
             ),
         )
@@ -361,7 +361,7 @@ async def _act_execute(
             row = await tasks_repo.get_task_row(conn, task_row["human_id"], for_update=True)
             current = TaskStatus(row["status"])
             if not can_transition(current, TaskStatus.AI_WORK):
-                # 判断と現況が食い違った（並行操作等）。防御的に人へバトンを渡して停止
+                # 判断と現況が食い違った（並行操作等）。防御的に人へ引き継いで停止
                 comment = await comments_repo.create_comment(
                     conn,
                     row,
@@ -442,7 +442,7 @@ async def _act_review(
                 "select count(*) from artifacts where task_id = $1", row["id"]
             )
             if artifact_count == 0:
-                # 判断と現況が食い違った（成果物なし）。防御的に人へバトンを渡して停止
+                # 判断と現況が食い違った（成果物なし）。防御的に人へ引き継いで停止
                 comment = await comments_repo.create_comment(
                     conn,
                     row,
@@ -537,7 +537,7 @@ async def _continue_after_chain(
 async def _act_handoff_human(
     job_id: str, task_row: asyncpg.Record, decision: NextActionResult
 ) -> None:
-    """人へバトンを渡して停止する。AI持ちの status なら人のボールへ遷移させる。
+    """人へ引き継いで停止する。AI持ちの status なら人のボールへ遷移させる。
 
     成果物レビューが本筋なら you_review、それ以外は you_todo（遷移不可なら現状維持）。
     """
