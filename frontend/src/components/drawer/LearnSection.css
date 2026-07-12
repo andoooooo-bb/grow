@@ -1,0 +1,131 @@
+/* 学習セクション（§3.3.2c #14）: padding 14px 18px, 下線 #f1f3f5 */
+.learn-section {
+  flex: none;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--color-divider);
+}
+
+/* 上段 space-between: 説明文 ＋「✧ 学ぶ」 */
+.learn-section__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+/* 「このやり取りから働き方のルールを学べます」11.5px #555b66（太字部 #3a3f48） */
+.learn-section__lead {
+  font-size: 11.5px;
+  color: var(--color-text-mid);
+  line-height: 1.5;
+}
+
+.learn-section__lead b {
+  color: var(--color-text-body);
+}
+
+/* 「✧ 学ぶ」ボタン（文字 #5d4eb0, 背景 #f1edfb, 枠 #e3dbf6, radius8, 11.5px/700） */
+.learn-section__learn {
+  flex: none;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--color-purple);
+  background: var(--color-purple-bg);
+  border: 1px solid var(--color-purple-border);
+  border-radius: var(--radius-button);
+  padding: 8px 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.learn-section__learn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* 候補カード（枠 #e3dbf6 1.5px, radius11px, msgin） */
+.learn-section__card {
+  margin-top: 12px;
+  border: 1.5px solid var(--color-purple-border);
+  border-radius: var(--radius-proposal);
+  overflow: hidden;
+  animation: var(--anim-msgin);
+}
+
+/* ヘッダ帯「AIが見つけたルール候補 — 採用でナレッジに追加」（背景 #f1edfb, 11px/700 #5d4eb0） */
+.learn-section__band {
+  background: var(--color-purple-bg);
+  padding: 9px 12px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--color-purple);
+  line-height: 1.5;
+}
+
+.learn-section__list {
+  padding: 4px 12px 10px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 候補行: scopeミニバッジ＋候補文＋✕却下＋「採用」。下線 #f3f1f9 */
+.learn-section__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--color-divider-list-2);
+}
+
+/* scopeミニバッジ（チーム=ティール / 個人=アンバー, 8px/700, radius4, padding 2px 5px） */
+.learn-section__scope {
+  flex: none;
+  font-size: 8px;
+  font-weight: 700;
+  border-radius: var(--radius-minibadge);
+  padding: 2px 5px;
+}
+
+.learn-section__scope--team {
+  color: var(--color-teal-dark);
+  background: var(--color-teal-bg);
+}
+
+.learn-section__scope--personal {
+  color: var(--color-amber-text);
+  background: var(--color-amber-bg);
+}
+
+/* 候補文 12px #3a3f48 */
+.learn-section__text {
+  flex: 1;
+  font-size: 12px;
+  color: var(--color-text-body);
+  line-height: 1.45;
+}
+
+/* ✕ 却下（#b6bcc6, 素のテキストボタン） */
+.learn-section__dismiss {
+  flex: none;
+  font-size: 13px;
+  color: var(--color-dismiss);
+  background: none;
+  border: none;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0;
+}
+
+/* 「採用」ボタン（白文字, 背景 #5d4eb0, radius6px, 11px/700） */
+.learn-section__adopt {
+  flex: none;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--color-purple);
+  border: none;
+  border-radius: var(--radius-badge-lg);
+  padding: 5px 10px;
+  cursor: pointer;
+  font-family: inherit;
+}

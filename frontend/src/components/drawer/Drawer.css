@@ -1,0 +1,21 @@
+/* カード詳細ドロワー（§3.3）: 幅412px, 白, 左枠, batonin スライドイン */
+.drawer {
+  flex: none;
+  width: var(--drawer-width);
+  background: var(--color-surface);
+  border-left: 1px solid var(--color-drawer-border);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  box-shadow: var(--shadow-drawer);
+  animation: var(--anim-batonin);
+}
+
+/* detail モード（§3.3.2）: 縦スクロール領域に (a)〜(f) を順に積む */
+.drawer__detail {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}

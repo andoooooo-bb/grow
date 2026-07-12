@@ -1,0 +1,34 @@
+/* ボード（§3.2）: 横スクロール領域（overflow-x:auto） */
+.board {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* 5レーンを gap14px で横並び、padding 18px 20px、高さ100% */
+.board__lanes {
+  display: flex;
+  gap: var(--lane-gap);
+  padding: var(--board-padding);
+  align-items: flex-start;
+  height: 100%;
+}
+
+/* ボード操作の簡易エラー（#8: move/addCard/markDone の失敗・不正遷移フィードバック）。
+ * ActivityThread の簡易エラーと同じ attention トーン（§5.4）。 */
+.board__error {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 40;
+  font-size: 11.5px;
+  color: var(--color-amber-text2);
+  background: var(--color-amber-bg2);
+  border: 1px solid var(--color-amber-bg);
+  border-radius: 7px;
+  padding: 8px 12px;
+  box-shadow: var(--shadow-card-hover);
+  animation: var(--anim-msgin);
+}

@@ -1,0 +1,22 @@
+[
+  { "from": "breakdown", "to": "spec" },
+  { "from": "spec", "to": "ai_work" },
+  { "from": "queued", "to": "ai_work" },
+  { "from": "you_todo", "to": "done" },
+  { "from": "you_todo", "to": "ai_work" },
+  { "from": "ai_work", "to": "you_review" },
+  { "from": "ai_work", "to": "you_todo" },
+  { "from": "you_review", "to": "reviewing" },
+  { "from": "you_review", "to": "done" },
+  { "from": "you_review", "to": "ai_work" },
+  { "from": "reviewing", "to": "done" },
+  { "from": "reviewing", "to": "ai_work" },
+  { "from": "reviewing", "to": "you_todo" },
+  { "from": "done", "to": "queued" },
+  { "from": "done", "to": "breakdown" },
+  { "from": "done", "to": "spec" },
+  { "from": "done", "to": "ai_work" },
+  { "from": "done", "to": "you_todo" },
+  { "from": "done", "to": "you_review" },
+  { "from": "done", "to": "reviewing" }
+]

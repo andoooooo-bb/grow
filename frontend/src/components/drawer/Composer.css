@@ -1,0 +1,48 @@
+/* コンポーザ（§3.3.2f）: padding 12px 16px, 上線, 背景 #fafbfc */
+.composer {
+  flex: none;
+  padding: 12px 16px;
+  border-top: 1px solid var(--color-divider-2);
+  background: var(--color-surface-soft);
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+/* 入力欄（枠 #dde2e8, radius9px, padding 10px 12px, 12.5px） */
+.composer__input {
+  flex: 1;
+  border: 1px solid var(--color-input-border);
+  border-radius: var(--radius-input);
+  padding: 10px 12px;
+  font-size: 12.5px;
+  font-family: inherit;
+  color: var(--color-text-strong);
+  line-height: 1.5;
+  outline: none;
+  background: var(--color-surface);
+  resize: none;
+}
+
+.composer__input::placeholder {
+  color: var(--color-text-weakest);
+}
+
+/* 「送信」ボタン（ダーク: 背景 #1f2430 白文字, radius9px） */
+.composer__send {
+  flex: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--color-btn-dark-bg);
+  border: none;
+  border-radius: var(--radius-button-lg);
+  padding: 10px 14px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+/* chat モードの「送信」（§3.3.3 #12）: パープル #5d4eb0 */
+.composer__send--chat {
+  background: var(--color-purple);
+}

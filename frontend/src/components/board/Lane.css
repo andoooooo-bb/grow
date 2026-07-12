@@ -1,0 +1,69 @@
+/* レーン（§3.2）: 幅272px固定、縦flex、gap10px、高さ100% */
+.lane {
+  flex: none;
+  width: var(--lane-width);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+}
+
+/* レーンヘッダ（固定, flex:none）: 白背景・枠#e4e7ec・radius8・padding 7px 11px */
+.lane__header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--color-surface);
+  border: 1px solid var(--color-lane-header-border);
+  border-radius: var(--radius-lane-header);
+  padding: 7px 11px;
+}
+
+.lane__name {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--color-lane-name);
+  letter-spacing: 0.02em;
+}
+
+/* 件数ピル（10.5px, mono, 背景#f1f3f5, radius5, padding 1px 7px） */
+.lane__count {
+  font-size: 10.5px;
+  color: var(--color-text-weak);
+  font-family: var(--font-mono);
+  background: var(--color-chip-bg-2);
+  border-radius: var(--radius-badge);
+  padding: 1px 7px;
+}
+
+/* カードリスト（flex:1, overflow-y:auto, gap10px, padding 2px 2px 12px） */
+.lane__cards {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  padding: 2px 2px 12px;
+}
+
+/* ドロップ先ハイライト（#8: ドラッグ中カードがレーン上にあるとき） */
+.lane--over .lane__cards {
+  outline: 2px dashed var(--color-dashed-border);
+  outline-offset: 2px;
+  border-radius: var(--radius-card);
+}
+
+/* 「＋ カードを追加」破線ボタン */
+.lane__add {
+  flex: none;
+  border: 1px dashed var(--color-dashed-border);
+  background: var(--color-surface);
+  border-radius: 7px;
+  padding: 8px;
+  font-size: 11.5px;
+  color: var(--color-text-weakest);
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+}

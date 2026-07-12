@@ -1,0 +1,205 @@
+-- Grow DB スキーマ（docs/design_handoff_baton/02_data_model.md §2.4 が正）
+-- 適用は空DBが前提。リセットは make db-reset → make migrate → make seed の運用。
+-- human_id（T-{seq} / K-{seq}）は workspace 内連番、DB主キーは UUID（§00 #9）。
+
+create table if not exists workspaces (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists users (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references workspaces(id),
+  display_name text not null,
+  initials text not null,           -- アバター表示（例 "YK"）
+  created_at timestamptz not null default now()
+);
+
+create table if not exists boards (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references workspaces(id),
+  name text not null default '個人ボード'
+);
+
+-- レーンは固定5種でも良いが、将来のカスタム列に備えテーブル化
+create table if not exists lanes (
+  id uuid primary key default gen_random_uuid(),
+  board_id uuid not null references boards(id),
+  key text not null,                -- 'backlog' | 'todo' | 'progress' | 'review' | 'done'
+  name text not null,
+  position int not null
+);
+
+create table if not exists tasks (
+  id uuid primary key default gen_random_uuid(),
+  human_id text not null,           -- 表示用 "T-098"（workspace内ユニーク）
+  workspace_id uuid not null references workspaces(id),
+  board_id uuid not null references boards(id),
+  lane_key text not null,
+  order_in_lane int not null default 0,
+  title text not null,
+  status text not null,             -- TaskStatus
+  owner_user_id uuid references users(id),
+  labels text[] not null default '{}',
+  progress int,                     -- 0..100 nullable
+  parent_id uuid references tasks(id),
+  -- タスク別オートノミー（#21）: 'L0'(計画のみ) | 'L1'(下書きまで・既定) |
+  -- 'L2'(プラン承認後は自動) | 'L3'(全自動・事後レビュー)。正準は shared/contracts/autonomy_levels.json
+  autonomy text not null default 'L1',
+  -- 行動範囲ポリシー（#21）: {"allowWebSearch": bool, "costCapUsd": number|null}。
+  -- 省略キーは既定値（Web検索可・コスト上限なし）。domain/models.py TaskPolicy と鏡写し
+  policy jsonb not null default '{}',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists idx_tasks_board_lane_order on tasks (board_id, lane_key, order_in_lane);
+create index if not exists idx_tasks_parent on tasks (parent_id);
+create index if not exists idx_tasks_labels on tasks using gin (labels);
+
+create table if not exists comments (
+  id uuid primary key default gen_random_uuid(),
+  task_id uuid not null references tasks(id) on delete cascade,
+  author text not null,             -- 'ai' | 'human'
+  author_user_id uuid references users(id),
+  text text not null,
+  -- AIコメントの役割バッジ（#19）: 'planner'|'executor'|'reviewer'|'distiller'|'conductor'。
+  -- null = 役割なし（human コメント・旧AIコメントは従来通り「Grow」表示）
+  agent_role text,
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_comments_task_created on comments (task_id, created_at);
+
+create table if not exists chat_messages (
+  id uuid primary key default gen_random_uuid(),
+  task_id uuid not null references tasks(id) on delete cascade,
+  author text not null,
+  text text not null,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists rules (
+  id uuid primary key default gen_random_uuid(),
+  human_id text not null,           -- "K-01"
+  workspace_id uuid not null references workspaces(id),
+  scope text not null,              -- 'personal' | 'team'
+  owner_user_id uuid references users(id),
+  text text not null,
+  tags text[] not null default '{}',
+  source text not null default '',
+  source_task_id uuid references tasks(id),
+  confidence text not null default 'med',
+  applied int not null default 0,
+  last_applied_at timestamptz,
+  -- 棚卸しアーカイブ（#26 §6.6）: true は retrieval（relevant_rules）から除外される。
+  -- 物理削除はしない（rule_applications の証跡・説明可能性を保つ）
+  archived boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+  -- 将来: embedding vector(1536)  -- pgvector で意味検索（§06）
+);
+create index if not exists idx_rules_tags on rules using gin (tags);
+create index if not exists idx_rules_ws_scope on rules (workspace_id, scope);
+
+create table if not exists rule_applications (   -- どのルールをどのタスクに適用したか（証跡・分析）
+  id uuid primary key default gen_random_uuid(),
+  rule_id uuid not null references rules(id) on delete cascade,
+  task_id uuid not null references tasks(id) on delete cascade,
+  applied_at timestamptz not null default now()
+);
+
+-- 手動蒸留での人の採用/却下ログ（§6.4a）。将来の半自動/自動化のお手本データ（#13）
+-- task_id は nullable（#26: 夜間ナレッジCI由来の提案はタスクに紐づかないことがある）
+create table if not exists rule_feedback (
+  id uuid primary key default gen_random_uuid(),
+  task_id uuid references tasks(id) on delete cascade,
+  action text not null,             -- 'adopt' | 'dismiss'
+  text text not null,
+  scope text not null,
+  tags text[] not null default '{}',
+  confidence text not null,
+  created_at timestamptz not null default now()
+);
+
+-- 夜間ナレッジCIの提案受信箱（#26 §6.4b/c）。人が朝まとめて採用/却下する
+create table if not exists rule_proposals (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references workspaces(id),
+  kind text not null,               -- 'distill' | 'merge' | 'conflict' | 'demote'
+  text text not null default '',    -- 新規/置き換えルールの文案（demote は空）
+  scope text not null default 'personal',
+  tags text[] not null default '{}',
+  confidence text not null default 'med',
+  source text not null default '',
+  -- merge/conflict/demote の対象既存ルール（distill は空配列）
+  target_rule_ids uuid[] not null default '{}',
+  note text not null default '',    -- AIの判断説明（受信箱カードに表示）
+  source_task_id uuid references tasks(id),  -- distill の由来タスク
+  status text not null default 'pending',    -- 'pending' | 'adopted' | 'dismissed'
+  created_at timestamptz not null default now(),
+  decided_at timestamptz
+);
+create index if not exists idx_rule_proposals_ws_status_created on rule_proposals (workspace_id, status, created_at);
+
+-- レビュー承認/差し戻しの暗黙評価（#26 §6.6）。確度の自動昇降格の材料
+create table if not exists rule_signals (
+  id uuid primary key default gen_random_uuid(),
+  rule_id uuid not null references rules(id) on delete cascade,
+  task_id uuid not null references tasks(id) on delete cascade,
+  signal text not null,             -- 'positive'（承認）| 'negative'（差し戻し/再開）
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_rule_signals_rule_signal on rule_signals (rule_id, signal);
+
+-- 全ステータス遷移の履歴（#28 信頼グラデュエーション）。差し戻し検知（自律性の
+-- 自動降格）と、将来の昇格提案（連続ノー修正承認の集計）の材料。
+-- rule_signals と同じ遷移フック（repo/tasks.py apply_patch）で記録する
+create table if not exists task_transitions (
+  id uuid primary key default gen_random_uuid(),
+  task_id uuid not null references tasks(id) on delete cascade,
+  from_status text not null,          -- TaskStatus
+  to_status text not null,            -- TaskStatus
+  actor text not null default 'system',  -- 'human' | 'ai' | 'policy' | 'system'(判別不能)
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_task_transitions_task_created on task_transitions (task_id, created_at);
+
+-- 夜間ナレッジCIの実行記録（#26）。可観測性とコスト集計
+create table if not exists knowledge_ci_runs (
+  id uuid primary key default gen_random_uuid(),
+  trigger text not null,            -- 'scheduled'（Cloud Scheduler）| 'manual'（デモボタン）
+  proposals_created int not null default 0,
+  rules_scanned int not null default 0,
+  tasks_scanned int not null default 0,
+  input_tokens int,
+  output_tokens int,
+  cost_usd numeric(10,4),
+  started_at timestamptz not null default now(),
+  finished_at timestamptz
+);
+
+create table if not exists ai_jobs (
+  id uuid primary key default gen_random_uuid(),
+  task_id uuid not null references tasks(id) on delete cascade,
+  kind text not null,               -- 'execute' | 'breakdown' | 'distill' | 'orchestrate'(#22) | 'review'(#23)
+  status text not null default 'queued',
+  applied_rule_ids uuid[] not null default '{}',
+  error text,
+  input_tokens int,                 -- コスト可視化（§00 #16 / §07.6）
+  output_tokens int,
+  cost_usd numeric(10,4),           -- 概算コスト
+  created_at timestamptz not null default now(),
+  finished_at timestamptz
+);
+
+-- AI実作業の成果物（§00 #2）: Markdownレポート。版を重ねる（最大 version が最新）
+create table if not exists artifacts (
+  id uuid primary key default gen_random_uuid(),
+  task_id uuid not null references tasks(id) on delete cascade,
+  job_id uuid references ai_jobs(id),
+  version int not null,             -- タスク内で 1,2,3…
+  content_md text not null,
+  created_at timestamptz not null default now(),
+  unique (task_id, version)
+);
+create index if not exists idx_artifacts_task_version on artifacts (task_id, version desc);  -- 最新版の取得を高速に

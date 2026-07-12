@@ -1,0 +1,144 @@
+/* リレー・タイムライン（#19）: サブタスク(d)の後に置くコンパクトなステップ帯 */
+.agent-timeline {
+  flex: none;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--color-divider);
+}
+
+/* 見出し 11px/700 #7a818b（他セクションと同規格） */
+.agent-timeline__heading {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--color-text-secondary);
+  letter-spacing: 0.04em;
+  margin-bottom: 10px;
+}
+
+/* ステップ帯: 折返し可の横並び */
+.agent-timeline__track {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 0;
+}
+
+.agent-timeline__segment {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* ステップ間の矢印（→） */
+.agent-timeline__arrow {
+  width: 14px;
+  height: 1px;
+  margin: 0 4px;
+  background: var(--color-dashed-border);
+  position: relative;
+}
+
+.agent-timeline__arrow::after {
+  content: '';
+  position: absolute;
+  right: -1px;
+  top: -2.5px;
+  border-left: 4px solid var(--color-dashed-border);
+  border-top: 3px solid transparent;
+  border-bottom: 3px solid transparent;
+}
+
+/* ステップ本体: ドット＋役割名（10.5px/600） */
+.agent-timeline__step {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 6px;
+}
+
+.agent-timeline__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+/* 完了 = 塗り（役割色。既定はティール） */
+.agent-timeline__step--done {
+  color: var(--color-teal-dark);
+  background: var(--color-teal-bg);
+}
+
+.agent-timeline__step--done .agent-timeline__dot {
+  background: var(--color-teal);
+}
+
+/* 完了×計画/学習 = パープル系（§04: 計画/学習=パープル） */
+.agent-timeline__step--done.agent-timeline__step--planner,
+.agent-timeline__step--done.agent-timeline__step--distiller {
+  color: var(--color-purple);
+  background: var(--color-purple-bg2);
+}
+
+.agent-timeline__step--done.agent-timeline__step--planner .agent-timeline__dot,
+.agent-timeline__step--done.agent-timeline__step--distiller .agent-timeline__dot {
+  background: var(--color-purple-mid);
+}
+
+/* 実行中 = 点滅ドット（batonpulse） */
+.agent-timeline__step--active {
+  color: var(--color-teal-dark);
+  background: var(--color-teal-bg);
+}
+
+.agent-timeline__step--active .agent-timeline__dot {
+  background: var(--color-teal-bright);
+  animation: var(--anim-batonpulse);
+}
+
+/* 「あなた」が active のときはアンバー（人のトーン §04） */
+.agent-timeline__step--active:not([class*='--planner']):not([class*='--executor']):not(
+    [class*='--distiller']
+  ) {
+  color: var(--color-amber-text2);
+  background: var(--color-amber-bg2);
+}
+
+.agent-timeline__step--active:not([class*='--planner']):not([class*='--executor']):not(
+    [class*='--distiller']
+  )
+  .agent-timeline__dot {
+  background: var(--color-amber);
+  animation: var(--anim-batonpulse-attention);
+}
+
+/* 実行中×実行AI = ティールのまま（上の人向け既定を打ち消す） */
+.agent-timeline__step--active.agent-timeline__step--executor {
+  color: var(--color-teal-dark);
+  background: var(--color-teal-bg);
+}
+
+.agent-timeline__step--active.agent-timeline__step--executor .agent-timeline__dot {
+  background: var(--color-teal-bright);
+  animation: var(--anim-batonpulse);
+}
+
+/* 未来 = グレー */
+.agent-timeline__step--future {
+  color: var(--color-neutral-badge-text);
+  background: var(--color-chip-bg-2);
+}
+
+.agent-timeline__step--future .agent-timeline__dot {
+  background: var(--color-neutral-badge-dot);
+}
+
+/* 失敗 = アンバー（attention。人へのハンドオフ済みを示す） */
+.agent-timeline__step--failed {
+  color: var(--color-amber-text2);
+  background: var(--color-amber-bg2);
+}
+
+.agent-timeline__step--failed .agent-timeline__dot {
+  background: var(--color-amber);
+}

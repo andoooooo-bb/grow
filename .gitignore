@@ -1,0 +1,22 @@
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# ローカルDB（scripts/devdb.sh のエフェメラルクラスタ）
+.pgdata/
+
+# 環境変数
+.env
+.env.*
+!.env.example
+
+# OS / エディタ
+.DS_Store

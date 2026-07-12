@@ -1,0 +1,17 @@
+# ローカル開発用 PostgreSQL（Docker が使える環境向け）。
+# Docker daemon が無い環境では scripts/devdb.sh が pg_ctl フォールバックで同等のDBを起動する。
+services:
+  db:
+    image: postgres:16
+    container_name: grow-db
+    environment:
+      POSTGRES_USER: grow
+      POSTGRES_PASSWORD: grow
+      POSTGRES_DB: grow
+    ports:
+      - "54329:5432"
+    volumes:
+      - grow-pgdata:/var/lib/postgresql/data
+
+volumes:
+  grow-pgdata:

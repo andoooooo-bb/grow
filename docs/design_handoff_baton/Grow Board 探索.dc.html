@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700&family=Zen+Maru+Gothic:wght@400;500;700&family=IBM+Plex+Sans+JP:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+@keyframes batonpulse{0%,100%{opacity:1;transform:scale(1);}50%{opacity:.3;transform:scale(.65);}}
+</style>
+</helmet>
+
+<div style="min-width:100%;min-height:100vh;box-sizing:border-box;padding:48px;background:#e6e4df;width:max-content;display:flex;flex-direction:column;gap:42px;font-family:'Zen Kaku Gothic New',sans-serif;">
+
+  <!-- ===== INTRO ===== -->
+  <div style="max-width:920px;background:#fff;border:1px solid #e4e2db;border-radius:16px;padding:28px 32px;box-shadow:0 1px 3px rgba(0,0,0,.05);">
+    <div style="font-size:11px;font-weight:700;letter-spacing:.14em;color:#9a948a;">デザイン探索 · 看板ボード</div>
+    <h1 style="font-size:26px;font-weight:700;color:#2b2823;margin:8px 0 12px;letter-spacing:-.01em;">Baton — 人とAIでタスクの&ldquo;バトン&rdquo;を渡し合う</h1>
+    <p style="font-size:14px;color:#5b5852;line-height:1.8;max-width:780px;margin:0 0 20px;text-wrap:pretty;">カードがタスク、コメント欄が人とAIの共有のやり取り。人がコメントで依頼するとAI（または人）が着手し、AIは進捗を同じカードにコメントしていきます。人はいつでも介入でき、必要なら個別のチャットで仕様を壁打ちしてからAIが実行。完了したら人へバトンが渡ります。</p>
+
+    <div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:22px;">
+      <span style="font-size:12px;font-weight:500;color:#44413b;background:#f4f2ec;border:1px solid #e7e4dc;border-radius:8px;padding:6px 11px;">① 人がコメントで依頼</span>
+      <span style="color:#bdb8ad;">→</span>
+      <span style="font-size:12px;font-weight:500;color:#44413b;background:#f4f2ec;border:1px solid #e7e4dc;border-radius:8px;padding:6px 11px;">② AI／人が着手</span>
+      <span style="color:#bdb8ad;">→</span>
+      <span style="font-size:12px;font-weight:500;color:#44413b;background:#f4f2ec;border:1px solid #e7e4dc;border-radius:8px;padding:6px 11px;">③ AIが進捗を共有</span>
+      <span style="color:#bdb8ad;">→</span>
+      <span style="font-size:12px;font-weight:500;color:#44413b;background:#f4f2ec;border:1px solid #e7e4dc;border-radius:8px;padding:6px 11px;">④ 必要なら壁打ちチャット</span>
+      <span style="color:#bdb8ad;">→</span>
+      <span style="font-size:12px;font-weight:500;color:#44413b;background:#f4f2ec;border:1px solid #e7e4dc;border-radius:8px;padding:6px 11px;">⑤ 完了で人へバトン</span>
+    </div>
+
+    <div style="display:flex;gap:24px;flex-wrap:wrap;font-size:12.5px;color:#6b675f;line-height:1.7;">
+      <div style="flex:1;min-width:260px;"><span style="font-weight:700;color:#3a372f;">AIと人の区別：</span>AIのカードと発言は アクセントカラー・「AI」アバター・状態バッジ ではっきり見分けられるようにしています。</div>
+      <div style="flex:1;min-width:260px;"><span style="font-weight:700;color:#3a372f;">次のステップ：</span>方向性が決まったら、ドラッグ＆ドロップ・カード詳細パネル・コメントスレッド・壁打ちチャットを備えたフル操作版を作り込みます。</div>
+    </div>
+  </div>
+
+  <!-- ===== FRAMES ROW ===== -->
+  <div style="display:flex;gap:48px;align-items:flex-start;">
+
+    <!-- ========================= 案A · QUIET ========================= -->
+    <div style="flex:none;width:1300px;">
+      <div style="margin-bottom:14px;">
+        <div style="font-size:11px;font-weight:700;letter-spacing:.13em;color:#8a8780;">案A · QUIET</div>
+        <div style="font-size:13px;color:#6f6b62;margin-top:3px;">静かでミニマル。余白で見せる、上品なワークスペース。</div>
+      </div>
+      <div style="border-radius:14px;overflow:hidden;border:1px solid #e7e8ee;box-shadow:0 18px 50px rgba(30,30,50,.13);background:#fafafc;font-family:'Zen Kaku Gothic New',sans-serif;">
+        <div style="display:flex;align-items:center;justify-content:space-between;height:50px;padding:0 18px;background:#fff;border-bottom:1px solid #ecedf2;">
+          <div style="display:flex;align-items:center;gap:9px;">
+            <div style="width:24px;height:24px;border-radius:7px;background:#5b5bd6;color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center;">B</div>
+            <span style="font-size:14px;font-weight:700;color:#2a2b30;letter-spacing:-.01em;">Baton</span>
+            <span style="width:1px;height:14px;background:#e3e4ea;"></span>
+            <span style="font-size:12px;color:#9a9da8;">個人ボード</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:#4b4fd0;background:#eef0fe;padding:4px 9px;border-radius:6px;font-weight:600;"><span style="width:6px;height:6px;border-radius:50%;background:#5b5bd6;animation:batonpulse 1.4s infinite;"></span>AI 稼働中</span>
+            <span style="width:26px;height:26px;border-radius:50%;background:#eceef3;color:#5b6070;font-size:10px;font-weight:600;display:flex;align-items:center;justify-content:center;">YK</span>
+          </div>
+        </div>
+        <div style="display:flex;gap:14px;padding:18px 20px;align-items:flex-start;min-height:640px;">
+          <sc-for list="{{ lanes }}" as="lane" hint-placeholder-count="5">
+            <div style="flex:none;width:236px;display:flex;flex-direction:column;gap:10px;">
+              <div style="display:flex;align-items:center;gap:8px;padding:0 2px 2px;">
+                <span style="font-size:12.5px;font-weight:700;color:#3a3c45;letter-spacing:.01em;">{{ lane.name }}</span>
+                <span style="font-size:11px;color:#a8abb5;font-weight:500;">{{ lane.count }}</span>
+              </div>
+              <sc-for list="{{ lane.cards }}" as="c" hint-placeholder-count="2">
+                <div style="position:relative;background:#fff;border:1px solid #e8e9ee;border-radius:10px;padding:11px 12px 11px 13px;display:flex;flex-direction:column;gap:8px;box-shadow:0 1px 2px rgba(20,22,40,.05);overflow:hidden;cursor:pointer;transition:box-shadow .15s,transform .15s;" style-hover="box-shadow:0 5px 16px rgba(20,22,40,.11);transform:translateY(-1px);">
+                  <sc-if value="{{ c.isAI }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;left:0;top:0;bottom:0;width:3px;background:#5b5bd6;"></div></sc-if>
+                  <div style="display:flex;align-items:center;justify-content:space-between;">
+                    <div style="display:flex;align-items:center;gap:7px;">
+                      <sc-if value="{{ c.isAI }}" hint-placeholder-val="{{ false }}"><span style="width:20px;height:20px;border-radius:6px;background:#5b5bd6;color:#fff;font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;">AI</span></sc-if>
+                      <sc-if value="{{ c.isHuman }}" hint-placeholder-val="{{ false }}"><span style="width:20px;height:20px;border-radius:50%;background:#eceef3;color:#5b6070;font-size:9px;font-weight:600;display:flex;align-items:center;justify-content:center;">{{ c.human }}</span></sc-if>
+                      <span style="font-size:10.5px;color:#abaeb8;letter-spacing:.03em;">{{ c.id }}</span>
+                    </div>
+                    <span style="display:inline-flex;align-items:center;gap:4px;font-size:10.5px;color:#a2a5b0;"><span style="width:5px;height:5px;border-radius:50%;background:#cfd2da;"></span>{{ c.comments }}</span>
+                  </div>
+                  <div style="font-size:13px;font-weight:500;color:#2c2e36;line-height:1.5;">{{ c.title }}</div>
+                  <sc-if value="{{ c.hasBadge }}" hint-placeholder-val="{{ false }}">
+                    <div>
+                      <sc-if value="{{ c.tWork }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:600;padding:3px 8px;border-radius:6px;background:#eef0fe;color:#4b4fd0;"><span style="width:5px;height:5px;border-radius:50%;background:#5b5bd6;animation:batonpulse 1.4s infinite;"></span>{{ c.badge }}</span></sc-if>
+                      <sc-if value="{{ c.tSpec }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:600;padding:3px 8px;border-radius:6px;background:#f1edfb;color:#6a59c0;"><span style="width:5px;height:5px;border-radius:50%;background:#7c6cd6;"></span>{{ c.badge }}</span></sc-if>
+                      <sc-if value="{{ c.tAttention }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:600;padding:3px 8px;border-radius:6px;background:#fdf1e0;color:#b07d28;"><span style="width:5px;height:5px;border-radius:50%;background:#d39b3e;animation:batonpulse 1.6s infinite;"></span>{{ c.badge }}</span></sc-if>
+                      <sc-if value="{{ c.tDone }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:600;padding:3px 8px;border-radius:6px;background:#ecf6f0;color:#3c8f63;"><span style="width:5px;height:5px;border-radius:50%;background:#4faf7c;"></span>{{ c.badge }}</span></sc-if>
+                      <sc-if value="{{ c.tNeutral }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:600;padding:3px 8px;border-radius:6px;background:#f1f2f6;color:#878b97;"><span style="width:5px;height:5px;border-radius:50%;background:#bfc3cd;"></span>{{ c.badge }}</span></sc-if>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ c.hasNote }}" hint-placeholder-val="{{ false }}">
+                    <div style="display:flex;gap:7px;align-items:flex-start;background:#f7f7fb;border-radius:7px;padding:7px 8px;">
+                      <sc-if value="{{ c.noteAI }}" hint-placeholder-val="{{ false }}"><span style="flex:none;width:16px;height:16px;border-radius:5px;background:#5b5bd6;color:#fff;font-size:7.5px;font-weight:700;display:flex;align-items:center;justify-content:center;">AI</span></sc-if>
+                      <sc-if value="{{ c.noteHuman }}" hint-placeholder-val="{{ false }}"><span style="flex:none;width:16px;height:16px;border-radius:50%;background:#e3e5ec;color:#6b7080;font-size:7.5px;font-weight:600;display:flex;align-items:center;justify-content:center;">{{ c.human }}</span></sc-if>
+                      <span style="font-size:11px;color:#666a76;line-height:1.45;">{{ c.note }}</span>
+                    </div>
+                  </sc-if>
+                  <div style="display:flex;gap:5px;flex-wrap:wrap;">
+                    <sc-for list="{{ c.labels }}" as="label" hint-placeholder-count="1"><span style="font-size:9.5px;color:#83879a;background:#f1f2f6;border-radius:5px;padding:2px 6px;">{{ label }}</span></sc-for>
+                  </div>
+                </div>
+              </sc-for>
+              <button style="border:1px dashed #dcdee6;background:transparent;border-radius:9px;padding:8px;font-size:12px;color:#9a9da8;cursor:pointer;font-family:inherit;text-align:left;">＋ カードを追加</button>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========================= 案B · SIGNAL ========================= -->
+    <div style="flex:none;width:1300px;">
+      <div style="margin-bottom:14px;">
+        <div style="font-size:11px;font-weight:700;letter-spacing:.13em;color:#8a8780;">案B · SIGNAL</div>
+        <div style="font-size:13px;color:#6f6b62;margin-top:3px;">情報密度高め。エージェントの状態が一目で追えるプロツール。</div>
+      </div>
+      <div style="border-radius:14px;overflow:hidden;border:1px solid #dfe3e9;box-shadow:0 18px 50px rgba(20,28,45,.15);background:#eef0f3;font-family:'IBM Plex Sans JP',sans-serif;">
+        <div style="display:flex;align-items:center;justify-content:space-between;height:50px;padding:0 18px;background:#1f2430;">
+          <div style="display:flex;align-items:center;gap:9px;">
+            <div style="width:24px;height:24px;border-radius:7px;background:#0f9488;color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center;">B</div>
+            <span style="font-size:14px;font-weight:700;color:#fff;letter-spacing:-.01em;">Baton</span>
+            <span style="width:1px;height:14px;background:#3a4150;"></span>
+            <span style="font-size:12px;color:#8a93a3;font-family:'JetBrains Mono',monospace;">workspace / 個人</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:#5fd6c9;background:rgba(15,148,136,.18);padding:4px 9px;border-radius:6px;font-weight:600;"><span style="width:6px;height:6px;border-radius:50%;background:#2bd6c4;animation:batonpulse 1.4s infinite;"></span>1 agent running</span>
+            <span style="width:26px;height:26px;border-radius:7px;background:#2c3340;color:#aeb6c2;font-size:10px;font-weight:600;display:flex;align-items:center;justify-content:center;">YK</span>
+          </div>
+        </div>
+        <div style="display:flex;gap:14px;padding:18px 20px;align-items:flex-start;min-height:640px;">
+          <sc-for list="{{ lanes }}" as="lane" hint-placeholder-count="5">
+            <div style="flex:none;width:236px;display:flex;flex-direction:column;gap:10px;">
+              <div style="display:flex;align-items:center;justify-content:space-between;background:#fff;border:1px solid #e4e7ec;border-radius:7px;padding:6px 10px;">
+                <span style="font-size:12px;font-weight:700;color:#2c333d;letter-spacing:.02em;">{{ lane.name }}</span>
+                <span style="font-size:10.5px;color:#8a909a;font-family:'JetBrains Mono',monospace;background:#f1f3f5;border-radius:5px;padding:1px 6px;">{{ lane.count }}</span>
+              </div>
+              <sc-for list="{{ lane.cards }}" as="c" hint-placeholder-count="2">
+                <div style="background:#fff;border:1px solid #e6e9ee;border-radius:8px;overflow:hidden;box-shadow:0 1px 2px rgba(20,24,40,.05);cursor:pointer;transition:box-shadow .15s,transform .15s;" style-hover="box-shadow:0 5px 16px rgba(20,24,40,.11);transform:translateY(-1px);">
+                  <sc-if value="{{ c.isAI }}" hint-placeholder-val="{{ false }}">
+                    <div style="display:flex;align-items:center;gap:6px;background:#e1f3f1;padding:5px 11px;">
+                      <span style="width:6px;height:6px;border-radius:50%;background:#0f9488;animation:batonpulse 1.4s infinite;"></span>
+                      <span style="font-size:9px;font-weight:700;color:#0b7a72;letter-spacing:.06em;font-family:'JetBrains Mono',monospace;">BATON · AGENT</span>
+                    </div>
+                  </sc-if>
+                  <div style="padding:10px 12px;display:flex;flex-direction:column;gap:8px;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;">
+                      <div style="display:flex;align-items:center;gap:7px;">
+                        <sc-if value="{{ c.isAI }}" hint-placeholder-val="{{ false }}"><span style="width:18px;height:18px;border-radius:5px;background:#0f9488;color:#fff;font-size:8px;font-weight:700;display:flex;align-items:center;justify-content:center;">AI</span></sc-if>
+                        <sc-if value="{{ c.isHuman }}" hint-placeholder-val="{{ false }}"><span style="width:18px;height:18px;border-radius:5px;background:#eceef2;color:#5b6070;font-size:8px;font-weight:600;display:flex;align-items:center;justify-content:center;">{{ c.human }}</span></sc-if>
+                        <span style="font-size:10px;color:#aab0b8;font-family:'JetBrains Mono',monospace;">{{ c.id }}</span>
+                      </div>
+                      <span style="display:inline-flex;align-items:center;gap:4px;font-size:10px;color:#9aa0a8;font-family:'JetBrains Mono',monospace;"><span style="width:5px;height:5px;border-radius:50%;background:#cdd2d8;"></span>{{ c.comments }}</span>
+                    </div>
+                    <div style="font-size:12.5px;font-weight:500;color:#2a2f38;line-height:1.5;">{{ c.title }}</div>
+                    <sc-if value="{{ c.hasProgress }}" hint-placeholder-val="{{ false }}">
+                      <div style="display:flex;flex-direction:column;gap:4px;">
+                        <div style="display:flex;justify-content:space-between;font-size:9.5px;color:#8a909a;font-family:'JetBrains Mono',monospace;"><span>progress</span><span>{{ c.progress }}%</span></div>
+                        <div style="height:4px;background:#e8ebef;border-radius:3px;overflow:hidden;"><div style="height:100%;width:60%;background:#0f9488;border-radius:3px;"></div></div>
+                      </div>
+                    </sc-if>
+                    <sc-if value="{{ c.hasBadge }}" hint-placeholder-val="{{ false }}">
+                      <div>
+                        <sc-if value="{{ c.tWork }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:600;padding:3px 8px;border-radius:5px;background:#e1f3f1;color:#0b7a72;"><span style="width:5px;height:5px;border-radius:50%;background:#0f9488;animation:batonpulse 1.4s infinite;"></span>{{ c.badge }}</span></sc-if>
+                        <sc-if value="{{ c.tSpec }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:600;padding:3px 8px;border-radius:5px;background:#ece8fb;color:#5d4eb0;"><span style="width:5px;height:5px;border-radius:50%;background:#7a6ad0;"></span>{{ c.badge }}</span></sc-if>
+                        <sc-if value="{{ c.tAttention }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:600;padding:3px 8px;border-radius:5px;background:#fcefe0;color:#b5781f;"><span style="width:5px;height:5px;border-radius:50%;background:#db8b2a;animation:batonpulse 1.6s infinite;"></span>{{ c.badge }}</span></sc-if>
+                        <sc-if value="{{ c.tDone }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:600;padding:3px 8px;border-radius:5px;background:#e9f4ee;color:#3a8a5f;"><span style="width:5px;height:5px;border-radius:50%;background:#4aa876;"></span>{{ c.badge }}</span></sc-if>
+                        <sc-if value="{{ c.tNeutral }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:600;padding:3px 8px;border-radius:5px;background:#eef0f3;color:#868c96;"><span style="width:5px;height:5px;border-radius:50%;background:#c4c9d1;"></span>{{ c.badge }}</span></sc-if>
+                      </div>
+                    </sc-if>
+                    <sc-if value="{{ c.hasNote }}" hint-placeholder-val="{{ false }}">
+                      <div style="display:flex;gap:7px;align-items:flex-start;border-left:2px solid #e2e5ea;padding-left:8px;">
+                        <sc-if value="{{ c.noteAI }}" hint-placeholder-val="{{ false }}"><span style="flex:none;width:15px;height:15px;border-radius:4px;background:#0f9488;color:#fff;font-size:7px;font-weight:700;display:flex;align-items:center;justify-content:center;">AI</span></sc-if>
+                        <sc-if value="{{ c.noteHuman }}" hint-placeholder-val="{{ false }}"><span style="flex:none;width:15px;height:15px;border-radius:4px;background:#e3e5ec;color:#6b7080;font-size:7px;font-weight:600;display:flex;align-items:center;justify-content:center;">{{ c.human }}</span></sc-if>
+                        <span style="font-size:10.5px;color:#666a76;line-height:1.45;">{{ c.note }}</span>
+                      </div>
+                    </sc-if>
+                    <div style="display:flex;gap:5px;flex-wrap:wrap;">
+                      <sc-for list="{{ c.labels }}" as="label" hint-placeholder-count="1"><span style="font-size:9.5px;color:#7f858f;background:#eef0f3;border-radius:4px;padding:2px 6px;font-family:'JetBrains Mono',monospace;">{{ label }}</span></sc-for>
+                    </div>
+                  </div>
+                </div>
+              </sc-for>
+              <button style="border:1px dashed #cfd4db;background:#fff;border-radius:7px;padding:8px;font-size:11.5px;color:#9aa0a8;cursor:pointer;font-family:inherit;text-align:left;">＋ add card</button>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========================= 案C · COMPANION ========================= -->
+    <div style="flex:none;width:1300px;">
+      <div style="margin-bottom:14px;">
+        <div style="font-size:11px;font-weight:700;letter-spacing:.13em;color:#8a8780;">案C · COMPANION</div>
+        <div style="font-size:13px;color:#6f6b62;margin-top:3px;">あたたかく、相棒のように。会話を主役にした親しみやすいボード。</div>
+      </div>
+      <div style="border-radius:14px;overflow:hidden;border:1px solid #ece2d2;box-shadow:0 18px 50px rgba(120,90,40,.15);background:#f7f2e9;font-family:'Zen Maru Gothic',sans-serif;">
+        <div style="display:flex;align-items:center;justify-content:space-between;height:50px;padding:0 18px;background:#fffdf8;border-bottom:1px solid #efe6d6;">
+          <div style="display:flex;align-items:center;gap:9px;">
+            <div style="width:24px;height:24px;border-radius:50%;background:#d68a3a;color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center;">B</div>
+            <span style="font-size:14px;font-weight:700;color:#4a3f30;letter-spacing:-.01em;">Baton</span>
+            <span style="width:1px;height:14px;background:#e6dcc9;"></span>
+            <span style="font-size:12px;color:#a8967a;">個人ボード</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:#3f6bc4;background:#eaf1fc;padding:4px 10px;border-radius:999px;font-weight:600;"><span style="width:6px;height:6px;border-radius:50%;background:#4f7fd6;animation:batonpulse 1.4s infinite;"></span>AIが作業中</span>
+            <span style="width:26px;height:26px;border-radius:50%;background:#f0d9bf;color:#9a6f3c;font-size:10px;font-weight:600;display:flex;align-items:center;justify-content:center;">YK</span>
+          </div>
+        </div>
+        <div style="display:flex;gap:14px;padding:18px 20px;align-items:flex-start;min-height:640px;">
+          <sc-for list="{{ lanes }}" as="lane" hint-placeholder-count="5">
+            <div style="flex:none;width:236px;display:flex;flex-direction:column;gap:10px;">
+              <div style="display:flex;align-items:center;gap:8px;padding:0 4px 2px;">
+                <span style="font-size:12.5px;font-weight:700;color:#5a4d3a;">{{ lane.name }}</span>
+                <span style="font-size:11px;color:#b3a489;font-weight:500;background:#f1e8d8;border-radius:999px;padding:1px 8px;">{{ lane.count }}</span>
+              </div>
+              <sc-for list="{{ lane.cards }}" as="c" hint-placeholder-count="2">
+                <div style="background:#fffdf8;border:1px solid #ece2d2;border-radius:16px;padding:13px 14px;display:flex;flex-direction:column;gap:9px;box-shadow:0 2px 6px rgba(120,90,40,.07);cursor:pointer;transition:box-shadow .15s,transform .15s;" style-hover="box-shadow:0 7px 20px rgba(120,90,40,.14);transform:translateY(-1px);">
+                  <div style="display:flex;align-items:center;justify-content:space-between;">
+                    <div style="display:flex;align-items:center;gap:7px;">
+                      <sc-if value="{{ c.isAI }}" hint-placeholder-val="{{ false }}"><span style="width:22px;height:22px;border-radius:50%;background:#4f7fd6;color:#fff;font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;">AI</span></sc-if>
+                      <sc-if value="{{ c.isHuman }}" hint-placeholder-val="{{ false }}"><span style="width:22px;height:22px;border-radius:50%;background:#f0d9bf;color:#9a6f3c;font-size:9px;font-weight:600;display:flex;align-items:center;justify-content:center;">{{ c.human }}</span></sc-if>
+                      <sc-if value="{{ c.isAI }}" hint-placeholder-val="{{ false }}"><span style="font-size:10.5px;color:#7e93c4;font-weight:500;">Baton</span></sc-if>
+                      <sc-if value="{{ c.isHuman }}" hint-placeholder-val="{{ false }}"><span style="font-size:10.5px;color:#b3a489;font-weight:500;">あなた</span></sc-if>
+                    </div>
+                    <span style="display:inline-flex;align-items:center;gap:4px;font-size:10.5px;color:#b3a489;"><span style="width:5px;height:5px;border-radius:50%;background:#d9cab0;"></span>{{ c.comments }}</span>
+                  </div>
+                  <div style="font-size:13px;font-weight:500;color:#4a3f30;line-height:1.55;">{{ c.title }}</div>
+                  <sc-if value="{{ c.hasBadge }}" hint-placeholder-val="{{ false }}">
+                    <div>
+                      <sc-if value="{{ c.tWork }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:600;padding:3px 9px;border-radius:999px;background:#e9f0fc;color:#3f6bc4;"><span style="width:5px;height:5px;border-radius:50%;background:#4f7fd6;animation:batonpulse 1.4s infinite;"></span>{{ c.badge }}</span></sc-if>
+                      <sc-if value="{{ c.tSpec }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:600;padding:3px 9px;border-radius:999px;background:#efeafc;color:#6451b3;"><span style="width:5px;height:5px;border-radius:50%;background:#7d6ad6;"></span>{{ c.badge }}</span></sc-if>
+                      <sc-if value="{{ c.tAttention }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:600;padding:3px 9px;border-radius:999px;background:#fcefdc;color:#b3792a;"><span style="width:5px;height:5px;border-radius:50%;background:#d68a3a;animation:batonpulse 1.6s infinite;"></span>{{ c.badge }}</span></sc-if>
+                      <sc-if value="{{ c.tDone }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:600;padding:3px 9px;border-radius:999px;background:#e8f3ea;color:#4a8a5f;"><span style="width:5px;height:5px;border-radius:50%;background:#5aa876;"></span>{{ c.badge }}</span></sc-if>
+                      <sc-if value="{{ c.tNeutral }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:600;padding:3px 9px;border-radius:999px;background:#f2ece0;color:#9a8b72;"><span style="width:5px;height:5px;border-radius:50%;background:#cbbda3;"></span>{{ c.badge }}</span></sc-if>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ c.hasNote }}" hint-placeholder-val="{{ false }}">
+                    <sc-if value="{{ c.noteAI }}" hint-placeholder-val="{{ false }}">
+                      <div style="background:#eaf1fc;border-radius:13px;border-bottom-left-radius:4px;padding:9px 11px;display:flex;flex-direction:column;gap:4px;">
+                        <span style="font-size:9.5px;font-weight:700;color:#3f6bc4;">Baton</span>
+                        <span style="font-size:11.5px;color:#3a5896;line-height:1.55;">{{ c.note }}</span>
+                      </div>
+                    </sc-if>
+                    <sc-if value="{{ c.noteHuman }}" hint-placeholder-val="{{ false }}">
+                      <div style="background:#fbf0e0;border-radius:13px;border-bottom-left-radius:4px;padding:9px 11px;display:flex;flex-direction:column;gap:4px;">
+                        <span style="font-size:9.5px;font-weight:700;color:#b3792a;">あなた</span>
+                        <span style="font-size:11.5px;color:#8a6736;line-height:1.55;">{{ c.note }}</span>
+                      </div>
+                    </sc-if>
+                  </sc-if>
+                  <div style="display:flex;gap:5px;flex-wrap:wrap;">
+                    <sc-for list="{{ c.labels }}" as="label" hint-placeholder-count="1"><span style="font-size:9.5px;color:#9a8b72;background:#f3ece0;border-radius:999px;padding:2px 8px;">{{ label }}</span></sc-for>
+                  </div>
+                </div>
+              </sc-for>
+              <button style="border:1px dashed #ddd0bb;background:transparent;border-radius:13px;padding:9px;font-size:12px;color:#b3a489;cursor:pointer;font-family:inherit;text-align:left;">＋ カードを追加</button>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  renderVals() {
+    const mk = (c) => ({
+      id: c.id,
+      title: c.title,
+      who: c.who,
+      human: c.human || 'YK',
+      badge: c.badge || '',
+      tone: c.tone || '',
+      note: c.note || '',
+      noteWho: c.noteWho || '',
+      comments: c.comments == null ? 0 : c.comments,
+      labels: c.labels || [],
+      progress: c.progress,
+      isAI: c.who === 'ai',
+      isHuman: c.who === 'human',
+      hasBadge: !!c.badge,
+      tWork: c.tone === 'work',
+      tSpec: c.tone === 'spec',
+      tAttention: c.tone === 'attention',
+      tDone: c.tone === 'done',
+      tNeutral: !!c.badge && !c.tone,
+      hasNote: !!c.note,
+      noteAI: c.noteWho === 'ai',
+      noteHuman: c.noteWho === 'human',
+      hasProgress: typeof c.progress === 'number',
+    });
+
+    const raw = [
+      { name: 'バックログ', cards: [
+        { id: 'T-118', title: 'ポートフォリオサイトのリニューアル', who: 'human', labels: ['個人', 'デザイン'], comments: 2 },
+        { id: 'T-121', title: '確定申告に必要な書類リストを作成', who: 'ai', badge: 'AI待機中', tone: '', labels: ['経理'], comments: 0, note: '依頼があれば着手します。', noteWho: 'ai' },
+      ]},
+      { name: 'ToDo', cards: [
+        { id: 'T-104', title: '競合SaaS 5社の料金プランを調査', who: 'ai', badge: '壁打ち中', tone: 'spec', labels: ['仕事', '調査'], comments: 5, note: '対象サービスと比較軸を確認しています。', noteWho: 'ai' },
+        { id: 'T-109', title: '週次レビューのテンプレートを作る', who: 'human', labels: ['個人'], comments: 1 },
+        { id: 'T-112', title: 'ブログ記事の構成案づくり', who: 'ai', badge: 'AI待機中', tone: '', labels: ['ブログ'], comments: 0, note: 'チャットで方向性を決めましょう。', noteWho: 'ai' },
+      ]},
+      { name: '進行中', cards: [
+        { id: 'T-098', title: '競合調査レポートの下書き', who: 'ai', badge: 'AI作業中', tone: 'work', labels: ['仕事', '調査'], comments: 8, note: '3社目を分析しています…', noteWho: 'ai', progress: 60 },
+        { id: 'T-101', title: '新機能のリリースノート', who: 'human', labels: ['ブログ'], comments: 3, note: 'あなたが編集中です。', noteWho: 'human' },
+      ]},
+      { name: 'レビュー', cards: [
+        { id: 'T-091', title: '確定申告サマリーの最終確認', who: 'ai', badge: 'あなたのレビュー待ち', tone: 'attention', labels: ['経理'], comments: 6, note: '完了しました。最終チェックをお願いします。', noteWho: 'ai' },
+        { id: 'T-089', title: '記事『AI協働術』の校正', who: 'human', badge: 'レビュー中', tone: '', labels: ['ブログ'], comments: 4, note: 'あと2段落、見直し中です。', noteWho: 'human' },
+      ]},
+      { name: '完了', cards: [
+        { id: 'T-080', title: '先週の経費を費目ごとに分類', who: 'ai', badge: '完了', tone: 'done', labels: ['経理'], comments: 3 },
+        { id: 'T-077', title: '名刺データをCSVに整理', who: 'ai', badge: '完了', tone: 'done', labels: ['仕事'], comments: 1 },
+      ]},
+    ];
+
+    const lanes = raw.map(l => ({ name: l.name, count: l.cards.length, cards: l.cards.map(mk) }));
+    return { lanes };
+  }
+}
+</script>
+</body>
+</html>

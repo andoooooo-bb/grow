@@ -1,0 +1,86 @@
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 600;
+}
+
+/* カード上（§3.2: 10px/600, padding 3px 8px, radius5, ドット5px） */
+.status-badge--sm {
+  font-size: 10px;
+  padding: 3px 8px;
+  border-radius: var(--radius-badge);
+}
+
+.status-badge--sm .status-badge__dot {
+  width: 5px;
+  height: 5px;
+}
+
+/* ドロワーヘッダ（§3.3.1: 11px/600, padding 4px 10px, radius6, ドット6px — #7 で使用） */
+.status-badge--lg {
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: var(--radius-badge-lg);
+}
+
+.status-badge--lg .status-badge__dot {
+  width: 6px;
+  height: 6px;
+}
+
+.status-badge__dot {
+  border-radius: 50%;
+}
+
+/* tone: work = ティール（点滅 1.4s） */
+.status-badge--work {
+  background: var(--color-teal-bg);
+  color: var(--color-teal-dark);
+}
+
+.status-badge--work .status-badge__dot {
+  background: var(--color-teal);
+  animation: var(--anim-batonpulse);
+}
+
+/* tone: spec = パープル */
+.status-badge--spec {
+  background: var(--color-purple-bg2);
+  color: var(--color-purple);
+}
+
+.status-badge--spec .status-badge__dot {
+  background: var(--color-purple-mid);
+}
+
+/* tone: attention = アンバー（点滅 1.6s） */
+.status-badge--attention {
+  background: var(--color-amber-bg2);
+  color: var(--color-amber-text2);
+}
+
+.status-badge--attention .status-badge__dot {
+  background: var(--color-amber);
+  animation: var(--anim-batonpulse-attention);
+}
+
+/* tone: neutral = グレー */
+.status-badge--neutral {
+  background: var(--color-chip-bg);
+  color: var(--color-neutral-badge-text);
+}
+
+.status-badge--neutral .status-badge__dot {
+  background: var(--color-neutral-badge-dot);
+}
+
+/* tone: done = グリーン */
+.status-badge--done {
+  background: var(--color-green-bg);
+  color: var(--color-green-text);
+}
+
+.status-badge--done .status-badge__dot {
+  background: var(--color-green);
+}

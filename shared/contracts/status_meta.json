@@ -1,0 +1,10 @@
+{
+  "queued": { "label": "AI待機中", "owner": "ai", "tone": "neutral" },
+  "breakdown": { "label": "分解しましょう", "owner": "human", "tone": "spec" },
+  "spec": { "label": "壁打ち中", "owner": "human", "tone": "spec" },
+  "ai_work": { "label": "AI作業中", "owner": "ai", "tone": "work" },
+  "you_todo": { "label": "あなたの作業待ち", "owner": "human", "tone": "attention" },
+  "you_review": { "label": "あなたのレビュー待ち", "owner": "human", "tone": "attention" },
+  "reviewing": { "label": "レビュー中", "owner": "human", "tone": "neutral" },
+  "done": { "label": "完了", "owner": "ai", "tone": "done" }
+}
