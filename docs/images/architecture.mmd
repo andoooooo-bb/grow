@@ -1,0 +1,29 @@
+flowchart LR
+    subgraph Browser["ブラウザ"]
+        SPA["React SPA<br/>Zustand / dnd-kit / TanStack Query"]
+    end
+
+    subgraph GCP["Google Cloud"]
+        subgraph CR["Cloud Run （grow / 1サービス）"]
+            API["FastAPI<br/>REST API ＋ SPA静的配信"]
+            WORKER["worker エンドポイント<br/>POST /internal/jobs/run"]
+        end
+        TASKS["Cloud Tasks<br/>grow-jobs キュー"]
+        SCHED["Cloud Scheduler<br/>毎日 03:00 JST"]
+        SQL["Cloud SQL<br/>PostgreSQL （最小ティア）"]
+        GEMINI["Vertex AI Gemini<br/>2.5-pro / 2.5-flash<br/>Function Calling ＋ Google Search grounding"]
+        DLP["Cloud DLP<br/>機微情報スキャン"]
+        SEC["Secret Manager<br/>DATABASE_URL / INTERNAL_JOBS_TOKEN"]
+    end
+
+    SPA -->|"REST"| API
+    API -->|"SSE /api/events（進捗を push）"| SPA
+    API -->|"enqueue"| TASKS
+    TASKS -->|"push（X-Internal-Jobs-Token）"| WORKER
+    SCHED -->|"POST /internal/knowledge/ci（夜間CI）"| WORKER
+    WORKER -->|"execute / decide / review / distill"| GEMINI
+    GEMINI -.->|"読み取りのみ"| WEB["Web（出典URL）"]
+    API --> SQL
+    WORKER --> SQL
+    API -->|"チーム昇格ガード"| DLP
+    CR --> SEC

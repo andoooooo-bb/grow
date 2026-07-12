@@ -1,0 +1,35 @@
+flowchart TD
+    START(["カード作成 / AIにまかせる / おまかせ"]) --> INTAKE
+
+    INTAKE["受付エージェント #27<br/>ルート判定 assess_task"]
+    INTAKE -->|"要ヒアリング"| PLAN
+    INTAKE -->|"大きい"| PLAN
+    INTAKE -->|"実行可能"| COND
+
+    PLAN["計画エージェント<br/>壁打ち・分解提案 propose_subtasks"]
+    PLAN -.->|"⚠ 人の承認: ボードへ反映"| COND
+
+    COND["指揮者エージェント #22<br/>decide_next_action で次の一手を判断"]
+    COND -->|"execute"| EXEC
+
+    subgraph LOOP["実行 ⇄ レビュー ループ（最大2周）"]
+        EXEC["実行エージェント #9 / #24<br/>ルール注入 → Gemini + Google Search<br/>→ Markdown成果物をストリーミング生成"]
+        REVIEW["レビューエージェント #23<br/>review_artifact で自己採点"]
+        EXEC --> REVIEW
+        REVIEW -->|"revise（差し戻し）"| EXEC
+    end
+
+    COND -->|"review"| REVIEW
+    REVIEW -->|"approve"| GATE{{"⚠ 人の承認ゲート<br/>you_review"}}
+    GATE -->|"承認"| DONE(["完了"])
+    GATE -->|"却下 #28"| DOWN["オートノミー自動降格<br/>信頼度を1段下げて再実行"]
+    DOWN --> EXEC
+
+    DONE -->|"✧ 学ぶ"| DISTILL
+    DISTILL["ナレッジ抽出エージェント #13<br/>propose_rules → 人が採用/却下"]
+    DISTILL --> KB[("ナレッジ<br/>rules")]
+    KB -.->|"次のタスクで retrieval 注入"| EXEC
+
+    NIGHT["夜間メンテナンス #26<br/>reconcile_rules：統合・矛盾検出・確度昇降格"]
+    KB -.-> NIGHT
+    NIGHT -.->|"受信箱へ提案（採否は人）"| KB
