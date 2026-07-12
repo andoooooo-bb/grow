@@ -11,8 +11,17 @@
   animation: var(--anim-batonin);
 }
 
-/* detail モード（§3.3.2）: 縦スクロール領域に (a)〜(f) を順に積む */
+/* detail モード（§3.3.2）: ヘッダ/アクションバー/コンポーザは固定し、中央だけ
+   スクロールさせる。長いスレッドでもレビュー操作とコメント欄が常に見えるように。 */
 .drawer__detail {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* 中央のスクロール領域（適用ルール〜アクティビティスレッド） */
+.drawer__scroll {
   flex: 1;
   overflow-y: auto;
   display: flex;
