@@ -99,18 +99,14 @@ if [ "$RESET" = true ]; then
   echo "  --reset: public スキーマを作り直します"
   "${PSQL[@]}" -c "drop schema public cascade; create schema public; grant all on schema public to ${DB_USER};"
 fi
-# schema.sql は空DB前提（create table に if not exists なし）。適用済みならスキップする。
-SCHEMA_APPLIED="$("${PSQL[@]}" -tAc "select to_regclass('public.tasks') is not null")"
-if [ "$SCHEMA_APPLIED" = "t" ]; then
-  echo "  スキーマは適用済みのためスキップ（作り直す場合は --reset を付ける）"
-else
-  "${PSQL[@]}" -f "$SCHEMA_FILE"
-  echo "  schema.sql を適用しました"
-fi
+# schema.sql は冪等（create table/index に if not exists）。常に適用してよい。
+# デプロイ間でテーブルが追加されても差分が確実に反映される（スキップしない）。
+"${PSQL[@]}" -f "$SCHEMA_FILE"
+echo "  schema.sql を適用しました（冪等・既存オブジェクトはスキップ）"
 
 if [ "$APPLY_SEED" = true ]; then
   echo "  --seed: 全テーブルを truncate してシードを投入します"
-  "${PSQL[@]}" -c "truncate workspaces, users, boards, lanes, tasks, comments, chat_messages, rules, rule_applications, ai_jobs, artifacts cascade"
+  "${PSQL[@]}" -c "truncate workspaces, users, boards, lanes, tasks, comments, chat_messages, rules, rule_applications, rule_feedback, rule_proposals, rule_signals, task_transitions, knowledge_ci_runs, ai_jobs, artifacts cascade"
   "${PSQL[@]}" -f "$SEED_FILE"
   echo "  seed.sql を投入しました（T-104 / T-098 など）"
 fi

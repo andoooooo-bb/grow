@@ -2,13 +2,13 @@
 -- 適用は空DBが前提。リセットは make db-reset → make migrate → make seed の運用。
 -- human_id（T-{seq} / K-{seq}）は workspace 内連番、DB主キーは UUID（§00 #9）。
 
-create table workspaces (
+create table if not exists workspaces (
   id uuid primary key default gen_random_uuid(),
   name text not null,
   created_at timestamptz not null default now()
 );
 
-create table users (
+create table if not exists users (
   id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null references workspaces(id),
   display_name text not null,
@@ -16,14 +16,14 @@ create table users (
   created_at timestamptz not null default now()
 );
 
-create table boards (
+create table if not exists boards (
   id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null references workspaces(id),
   name text not null default '個人ボード'
 );
 
 -- レーンは固定5種でも良いが、将来のカスタム列に備えテーブル化
-create table lanes (
+create table if not exists lanes (
   id uuid primary key default gen_random_uuid(),
   board_id uuid not null references boards(id),
   key text not null,                -- 'backlog' | 'todo' | 'progress' | 'review' | 'done'
@@ -31,7 +31,7 @@ create table lanes (
   position int not null
 );
 
-create table tasks (
+create table if not exists tasks (
   id uuid primary key default gen_random_uuid(),
   human_id text not null,           -- 表示用 "T-098"（workspace内ユニーク）
   workspace_id uuid not null references workspaces(id),
@@ -53,11 +53,11 @@ create table tasks (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-create index on tasks (board_id, lane_key, order_in_lane);
-create index on tasks (parent_id);
-create index on tasks using gin (labels);
+create index if not exists idx_tasks_board_lane_order on tasks (board_id, lane_key, order_in_lane);
+create index if not exists idx_tasks_parent on tasks (parent_id);
+create index if not exists idx_tasks_labels on tasks using gin (labels);
 
-create table comments (
+create table if not exists comments (
   id uuid primary key default gen_random_uuid(),
   task_id uuid not null references tasks(id) on delete cascade,
   author text not null,             -- 'ai' | 'human'
@@ -68,9 +68,9 @@ create table comments (
   agent_role text,
   created_at timestamptz not null default now()
 );
-create index on comments (task_id, created_at);
+create index if not exists idx_comments_task_created on comments (task_id, created_at);
 
-create table chat_messages (
+create table if not exists chat_messages (
   id uuid primary key default gen_random_uuid(),
   task_id uuid not null references tasks(id) on delete cascade,
   author text not null,
@@ -78,7 +78,7 @@ create table chat_messages (
   created_at timestamptz not null default now()
 );
 
-create table rules (
+create table if not exists rules (
   id uuid primary key default gen_random_uuid(),
   human_id text not null,           -- "K-01"
   workspace_id uuid not null references workspaces(id),
@@ -98,10 +98,10 @@ create table rules (
   updated_at timestamptz not null default now()
   -- 将来: embedding vector(1536)  -- pgvector で意味検索（§06）
 );
-create index on rules using gin (tags);
-create index on rules (workspace_id, scope);
+create index if not exists idx_rules_tags on rules using gin (tags);
+create index if not exists idx_rules_ws_scope on rules (workspace_id, scope);
 
-create table rule_applications (   -- どのルールをどのタスクに適用したか（証跡・分析）
+create table if not exists rule_applications (   -- どのルールをどのタスクに適用したか（証跡・分析）
   id uuid primary key default gen_random_uuid(),
   rule_id uuid not null references rules(id) on delete cascade,
   task_id uuid not null references tasks(id) on delete cascade,
@@ -110,7 +110,7 @@ create table rule_applications (   -- どのルールをどのタスクに適用
 
 -- 手動蒸留での人の採用/却下ログ（§6.4a）。将来の半自動/自動化のお手本データ（#13）
 -- task_id は nullable（#26: 夜間ナレッジCI由来の提案はタスクに紐づかないことがある）
-create table rule_feedback (
+create table if not exists rule_feedback (
   id uuid primary key default gen_random_uuid(),
   task_id uuid references tasks(id) on delete cascade,
   action text not null,             -- 'adopt' | 'dismiss'
@@ -122,7 +122,7 @@ create table rule_feedback (
 );
 
 -- 夜間ナレッジCIの提案受信箱（#26 §6.4b/c）。人が朝まとめて採用/却下する
-create table rule_proposals (
+create table if not exists rule_proposals (
   id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null references workspaces(id),
   kind text not null,               -- 'distill' | 'merge' | 'conflict' | 'demote'
@@ -139,22 +139,22 @@ create table rule_proposals (
   created_at timestamptz not null default now(),
   decided_at timestamptz
 );
-create index on rule_proposals (workspace_id, status, created_at);
+create index if not exists idx_rule_proposals_ws_status_created on rule_proposals (workspace_id, status, created_at);
 
 -- レビュー承認/差し戻しの暗黙評価（#26 §6.6）。確度の自動昇降格の材料
-create table rule_signals (
+create table if not exists rule_signals (
   id uuid primary key default gen_random_uuid(),
   rule_id uuid not null references rules(id) on delete cascade,
   task_id uuid not null references tasks(id) on delete cascade,
   signal text not null,             -- 'positive'（承認）| 'negative'（差し戻し/再開）
   created_at timestamptz not null default now()
 );
-create index on rule_signals (rule_id, signal);
+create index if not exists idx_rule_signals_rule_signal on rule_signals (rule_id, signal);
 
 -- 全ステータス遷移の履歴（#28 信頼グラデュエーション）。差し戻し検知（自律性の
 -- 自動降格）と、将来の昇格提案（連続ノー修正承認の集計）の材料。
 -- rule_signals と同じ遷移フック（repo/tasks.py apply_patch）で記録する
-create table task_transitions (
+create table if not exists task_transitions (
   id uuid primary key default gen_random_uuid(),
   task_id uuid not null references tasks(id) on delete cascade,
   from_status text not null,          -- TaskStatus
@@ -162,10 +162,10 @@ create table task_transitions (
   actor text not null default 'system',  -- 'human' | 'ai' | 'policy' | 'system'(判別不能)
   created_at timestamptz not null default now()
 );
-create index on task_transitions (task_id, created_at);
+create index if not exists idx_task_transitions_task_created on task_transitions (task_id, created_at);
 
 -- 夜間ナレッジCIの実行記録（#26）。可観測性とコスト集計
-create table knowledge_ci_runs (
+create table if not exists knowledge_ci_runs (
   id uuid primary key default gen_random_uuid(),
   trigger text not null,            -- 'scheduled'（Cloud Scheduler）| 'manual'（デモボタン）
   proposals_created int not null default 0,
@@ -178,7 +178,7 @@ create table knowledge_ci_runs (
   finished_at timestamptz
 );
 
-create table ai_jobs (
+create table if not exists ai_jobs (
   id uuid primary key default gen_random_uuid(),
   task_id uuid not null references tasks(id) on delete cascade,
   kind text not null,               -- 'execute' | 'breakdown' | 'distill' | 'orchestrate'(#22) | 'review'(#23)
@@ -193,7 +193,7 @@ create table ai_jobs (
 );
 
 -- AI実作業の成果物（§00 #2）: Markdownレポート。版を重ねる（最大 version が最新）
-create table artifacts (
+create table if not exists artifacts (
   id uuid primary key default gen_random_uuid(),
   task_id uuid not null references tasks(id) on delete cascade,
   job_id uuid references ai_jobs(id),
@@ -202,4 +202,4 @@ create table artifacts (
   created_at timestamptz not null default now(),
   unique (task_id, version)
 );
-create index on artifacts (task_id, version desc);  -- 最新版の取得を高速に
+create index if not exists idx_artifacts_task_version on artifacts (task_id, version desc);  -- 最新版の取得を高速に
