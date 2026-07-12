@@ -282,7 +282,9 @@ async def _act_hearing(
         task = None
         current = TaskStatus(row["status"])
         if current is not TaskStatus.SPEC and can_transition(current, TaskStatus.SPEC):
-            task = await tasks_repo.apply_patch(conn, row, {"status": TaskStatus.SPEC})
+            task = await tasks_repo.apply_patch(
+                conn, row, {"status": TaskStatus.SPEC}, actor="ai"
+            )
         await _mark_succeeded(conn, job_id, decision.usage, reply.usage)
     publish_event(CHAT_MESSAGE_CREATED, message.model_dump(mode="json", by_alias=True))
     if task is not None:
@@ -391,6 +393,7 @@ async def _act_execute(
                         "progress": 0,
                         "lane_key": LaneKey.PROGRESS,
                     },
+                    actor="ai",
                 )
                 exec_job_row = await ai_jobs_repo.create_job(
                     conn,
@@ -565,7 +568,7 @@ async def _act_handoff_human(
                 author=Author.AI, text=HANDOFF_COMMENT, agent_role=AgentRole.CONDUCTOR
             ),
         )
-        task = await tasks_repo.apply_patch(conn, row, fields)
+        task = await tasks_repo.apply_patch(conn, row, fields, actor="ai")
         await _mark_succeeded(conn, job_id, decision.usage)
     publish_event(COMMENT_CREATED, comment.model_dump(mode="json", by_alias=True))
     publish_event(TASK_UPDATED, task.model_dump(mode="json", by_alias=True))
@@ -610,7 +613,7 @@ async def _act_done(
             row,
             CommentCreate(author=Author.AI, text=text, agent_role=AgentRole.CONDUCTOR),
         )
-        task = await tasks_repo.apply_patch(conn, row, fields)
+        task = await tasks_repo.apply_patch(conn, row, fields, actor="ai")
         await _mark_succeeded(conn, job_id, decision.usage)
     publish_event(COMMENT_CREATED, comment.model_dump(mode="json", by_alias=True))
     publish_event(TASK_UPDATED, task.model_dump(mode="json", by_alias=True))
@@ -689,7 +692,7 @@ async def _stop_with_comment(job_id: str, task_row: asyncpg.Record, text: str) -
         fields: dict[str, Any] = {}
         if can_transition(TaskStatus(row["status"]), TaskStatus.YOU_TODO):
             fields = {"status": TaskStatus.YOU_TODO, "progress": None}
-        task = await tasks_repo.apply_patch(conn, row, fields)
+        task = await tasks_repo.apply_patch(conn, row, fields, actor="ai")
         await _mark_succeeded(conn, job_id, _ZERO_USAGE)
     publish_event(COMMENT_CREATED, comment.model_dump(mode="json", by_alias=True))
     publish_event(TASK_UPDATED, task.model_dump(mode="json", by_alias=True))
@@ -742,7 +745,7 @@ async def _handle_failure(job_id: str, error: Exception) -> None:
         fields: dict[str, Any] = {}
         if can_transition(TaskStatus(row["status"]), TaskStatus.YOU_TODO):
             fields = {"status": TaskStatus.YOU_TODO, "progress": None}
-        task = await tasks_repo.apply_patch(conn, row, fields)
+        task = await tasks_repo.apply_patch(conn, row, fields, actor="ai")
     publish_event(COMMENT_CREATED, comment.model_dump(mode="json", by_alias=True))
     publish_event(TASK_UPDATED, task.model_dump(mode="json", by_alias=True))
 

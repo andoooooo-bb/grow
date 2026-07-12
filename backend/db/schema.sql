@@ -151,6 +151,19 @@ create table rule_signals (
 );
 create index on rule_signals (rule_id, signal);
 
+-- 全ステータス遷移の履歴（#28 信頼グラデュエーション）。差し戻し検知（自律性の
+-- 自動降格）と、将来の昇格提案（連続ノー修正承認の集計）の材料。
+-- rule_signals と同じ遷移フック（repo/tasks.py apply_patch）で記録する
+create table task_transitions (
+  id uuid primary key default gen_random_uuid(),
+  task_id uuid not null references tasks(id) on delete cascade,
+  from_status text not null,          -- TaskStatus
+  to_status text not null,            -- TaskStatus
+  actor text not null default 'system',  -- 'human' | 'ai' | 'policy' | 'system'(判別不能)
+  created_at timestamptz not null default now()
+);
+create index on task_transitions (task_id, created_at);
+
 -- 夜間ナレッジCIの実行記録（#26）。可観測性とコスト集計
 create table knowledge_ci_runs (
   id uuid primary key default gen_random_uuid(),

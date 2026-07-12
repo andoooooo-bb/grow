@@ -176,7 +176,9 @@ async def start_chat(human_id: str) -> list[ChatMessage]:
             messages = [created]
             current = TaskStatus(row["status"])
             if current is not TaskStatus.SPEC and can_transition(current, TaskStatus.SPEC):
-                updated = await tasks_repo.apply_patch(conn, row, {"status": TaskStatus.SPEC})
+                updated = await tasks_repo.apply_patch(
+                    conn, row, {"status": TaskStatus.SPEC}, actor="human"
+                )
     if created is not None:
         publish_event(CHAT_MESSAGE_CREATED, created.model_dump(mode="json", by_alias=True))
     if updated is not None:
@@ -283,6 +285,7 @@ async def confirm_breakdown(
                 "lane_key": LaneKey.PROGRESS,
                 "order_in_lane": 0,
             },
+            actor="human",  # 「この内容でボードに反映する」= 人の確定操作
         )
 
         # c) 壁打ちへの締めメッセージ

@@ -196,7 +196,9 @@ async def _intake_attempt(job_id: str) -> None:
             current = TaskStatus(row["status"])
             if current is not TaskStatus.SPEC and can_transition(current, TaskStatus.SPEC):
                 fields = {"status": TaskStatus.SPEC}
-        task = await tasks_repo.apply_patch(conn, row, fields)  # commentCount 同期を兼ねる
+        task = await tasks_repo.apply_patch(
+            conn, row, fields, actor="ai"
+        )  # commentCount 同期を兼ねる
         await _mark_succeeded(conn, job_id, result)
 
     # 3) SSE 配信（コミット後。判定理由 → 案内 → 初期質問 → task.updated の順）

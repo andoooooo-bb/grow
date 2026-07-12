@@ -282,7 +282,7 @@ async def _post_progress_comment(task_row: asyncpg.Record, progress: int) -> Non
         fields: dict[str, Any] = (
             {"progress": progress} if TaskStatus(row["status"]) is TaskStatus.AI_WORK else {}
         )
-        task = await tasks_repo.apply_patch(conn, row, fields)
+        task = await tasks_repo.apply_patch(conn, row, fields, actor="ai")
     publish_event(COMMENT_CREATED, comment.model_dump(mode="json", by_alias=True))
     publish_event(TASK_UPDATED, task.model_dump(mode="json", by_alias=True))
 
@@ -294,7 +294,7 @@ async def _publish_progress(task_row: asyncpg.Record, progress: int) -> None:
         row = await tasks_repo.get_task_row(conn, task_row["human_id"], for_update=True)
         if TaskStatus(row["status"]) is not TaskStatus.AI_WORK:
             return  # 並行操作で ai_work を離れた（§5.6: progress は ai_work のみ）
-        task = await tasks_repo.apply_patch(conn, row, {"progress": progress})
+        task = await tasks_repo.apply_patch(conn, row, {"progress": progress}, actor="ai")
     publish_event(TASK_UPDATED, task.model_dump(mode="json", by_alias=True))
 
 
@@ -327,7 +327,7 @@ async def _handoff_plan(job_id: str, task_row: asyncpg.Record, result: Any) -> N
             )
             # §5.6 不変条件: ai_work 以外では progress は null
             task = await tasks_repo.apply_patch(
-                conn, row, {"status": TaskStatus.YOU_TODO, "progress": None}
+                conn, row, {"status": TaskStatus.YOU_TODO, "progress": None}, actor="ai"
             )
             # コスト実算定（#25）: L0 のプラン生成も execute ジョブ = Pro 単価
             await ai_jobs_repo.mark_succeeded(
@@ -372,7 +372,7 @@ async def _handle_final_failure(job_id: str, error: Exception) -> None:
             if can_transition(TaskStatus(row["status"]), TaskStatus.YOU_TODO):
                 # 再試行導線: you_todo に戻れば「AIにまかせる」を再度押せる（§7.2）
                 fields = {"status": TaskStatus.YOU_TODO, "progress": None}
-            task = await tasks_repo.apply_patch(conn, row, fields)
+            task = await tasks_repo.apply_patch(conn, row, fields, actor="ai")
     publish_event(COMMENT_CREATED, comment.model_dump(mode="json", by_alias=True))
     publish_event(TASK_UPDATED, task.model_dump(mode="json", by_alias=True))
 

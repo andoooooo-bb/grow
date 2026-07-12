@@ -9,8 +9,15 @@ from typing import Any
 
 import asyncpg
 
-from app.domain.dto import BoardResponse, LaneDto, TaskCreate
-from app.domain.models import Rule, Task, TaskPolicy
+from app.domain.dto import BoardResponse, CommentCreate, LaneDto, TaskCreate
+from app.domain.models import (
+    AgentRole,
+    Author,
+    AutonomyLevel,
+    Rule,
+    Task,
+    TaskPolicy,
+)
 
 
 class InvalidParentError(Exception):
@@ -244,12 +251,19 @@ async def create_task(conn: asyncpg.Connection, data: TaskCreate) -> Task:
 
 
 async def apply_patch(
-    conn: asyncpg.Connection, row: asyncpg.Record, fields: dict[str, Any]
+    conn: asyncpg.Connection,
+    row: asyncpg.Record,
+    fields: dict[str, Any],
+    *,
+    actor: str = "system",
 ) -> Task:
     """検証済みフィールドを適用する（遷移/不変条件の検証は呼び出し側 = ルーター）。
 
     lane_key / order_in_lane の変更は §5.3 move 準拠で両レーンの order を振り直す。
-    トランザクション内で呼ぶこと。
+    actor はステータス遷移の操作主体（'human'=人の操作 / 'ai'=AIジョブ /
+    'policy'=ポリシー起因の戻し。既定 'system'=判別不能）。遷移時に
+    task_transitions へ記録され、人の差し戻し時の autonomy 自動降格（#28）の
+    判定にも使う。トランザクション内で呼ぶこと。
     """
     updates: dict[str, Any] = {}
 
@@ -294,25 +308,94 @@ async def apply_patch(
         *values,
     )
     if new_row["status"] != row["status"]:
-        await _on_status_transition(conn, row, new_row)
+        new_row = await _on_status_transition(conn, row, new_row, actor=actor)
     return await task_from_row(conn, new_row)
 
 
+# ---- 信頼グラデュエーション（#28: 差し戻しによる自律性の自動降格） --------------------
+
+# 人による差し戻し/再オープンとみなす (from_status, to_status)。
+# rules.py _TRANSITION_SIGNALS の negative と同じ組（§5.6）
+_DEMOTE_TRANSITIONS: set[tuple[str, str]] = {
+    ("you_review", "ai_work"),  # 差し戻し
+    ("reviewing", "ai_work"),  # 差し戻し
+    ("done", "you_todo"),  # 完了の再オープン
+}
+
+# 1段降格の対応表。下限は L1（L0 へ下げると実行すら止まるため自動では下げない）
+_AUTONOMY_DOWNGRADE: dict[str, str] = {
+    AutonomyLevel.L3.value: AutonomyLevel.L2.value,
+    AutonomyLevel.L2.value: AutonomyLevel.L1.value,
+}
+
+# 降格理由コメント（指揮者AI名義 #19。権限の采配は指揮者の役割）
+AUTONOMY_DOWNGRADE_COMMENT_TEMPLATE = (
+    "差し戻しを受けて、このタスクの自律性を {before}→{after} に下げました。"
+    "信頼は実績で回復します。"
+)
+
+
 async def _on_status_transition(
-    conn: asyncpg.Connection, old_row: asyncpg.Record, new_row: asyncpg.Record
-) -> None:
+    conn: asyncpg.Connection,
+    old_row: asyncpg.Record,
+    new_row: asyncpg.Record,
+    *,
+    actor: str,
+) -> asyncpg.Record:
     """ステータス遷移フック（apply_patch = 全遷移が通る単一点。遷移時のみ呼ばれる）。
 
+    - #28: 全遷移を task_transitions へ記録する（actor = 誰が動かしたか）
     - #26: レビュー承認/差し戻し/再オープンを適用済みルールへの暗黙評価として
       rule_signals へ自動記録する（§6.6 確度ライフサイクルの材料）
-    - #28: 信頼グラデュエーションの task_transitions 記録もここに同居させる予定
-    トランザクション内で呼ばれる（apply_patch と同一コミット）。
+    - #28: 人の差し戻し（_DEMOTE_TRANSITIONS）で autonomy を1段自動降格し、
+      指揮者AI名義の理由コメントを残す（1遷移につき最大1段。下限 L1）
+
+    トランザクション内で呼ばれる（apply_patch と同一コミット）。降格を反映した
+    行を返すため、apply_patch が組む Task DTO と呼び出し元の task.updated 配信
+    （コミット後）には新しい autonomy が乗る。フック内から SSE は発火しない。
     """
+    from app.repo import comments as comments_repo  # 循環 import 回避
     from app.repo import rules as rules_repo  # 循環 import 回避（rules は tasks を参照しない）
 
-    await rules_repo.record_transition_signals(
-        conn, new_row, old_status=old_row["status"], new_status=new_row["status"]
+    old_status, new_status = old_row["status"], new_row["status"]
+
+    # 全遷移の記録（#28）。created_at は clock_timestamp(): 同一トランザクション内の
+    # 連鎖遷移（#21 L3 の ai_work→you_review→done 等）でも順序が保たれるように
+    await conn.execute(
+        "insert into task_transitions (task_id, from_status, to_status, actor, created_at) "
+        "values ($1, $2, $3, $4, clock_timestamp())",
+        new_row["id"],
+        old_status,
+        new_status,
+        actor,
     )
+
+    await rules_repo.record_transition_signals(
+        conn, new_row, old_status=old_status, new_status=new_status
+    )
+
+    # 自動降格（#28）は人の差し戻しのみ。AIのセルフレビュー差し戻し（#23）や
+    # ポリシー起因の戻し（#21 コスト上限）では下げない
+    after = _AUTONOMY_DOWNGRADE.get(new_row["autonomy"])
+    if actor != "human" or (old_status, new_status) not in _DEMOTE_TRANSITIONS or after is None:
+        return new_row
+
+    before = new_row["autonomy"]
+    new_row = await conn.fetchrow(
+        "update tasks set autonomy = $1, updated_at = now() where id = $2 returning *",
+        after,
+        new_row["id"],
+    )
+    await comments_repo.create_comment(
+        conn,
+        new_row,
+        CommentCreate(
+            author=Author.AI,
+            text=AUTONOMY_DOWNGRADE_COMMENT_TEMPLATE.format(before=before, after=after),
+            agent_role=AgentRole.CONDUCTOR,
+        ),
+    )
+    return new_row
 
 
 async def _resolve_parent(

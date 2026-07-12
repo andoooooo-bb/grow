@@ -103,6 +103,7 @@ async def _start_execution(conn, row):
     ]
 
     # 2) ai_work・progress 0・progress レーン末尾へ（§1.5 step2）
+    # assign-ai / reject は人の操作（#28: you_review/reviewing からの差し戻しなら降格）
     task = await tasks_repo.apply_patch(
         conn,
         row,
@@ -111,6 +112,7 @@ async def _start_execution(conn, row):
             "progress": 0,
             "lane_key": LaneKey.PROGRESS,
         },
+        actor="human",
     )
 
     # 5) ai_jobs 行作成（kind=execute, status=queued）
@@ -161,7 +163,10 @@ async def assign_ai(human_id: str) -> AssignAiResponse:
                     if can_transition(current_status, TaskStatus.YOU_TODO):
                         # 人へハンドオフ（§7.2 の失敗戻しと同じ遷移。不可なら現状維持）
                         fields = {"status": TaskStatus.YOU_TODO, "progress": None}
-                    cap_task = await tasks_repo.apply_patch(conn, row, fields)
+                    # コスト上限による戻しはポリシー起因（#28: 降格はしない）
+                    cap_task = await tasks_repo.apply_patch(
+                        conn, row, fields, actor="policy"
+                    )
                     capped = (cap_comment, cap_task, spent, policy.cost_cap_usd)
 
             if capped is None:
@@ -373,7 +378,10 @@ async def autopilot(human_id: str) -> AssignAiResponse:
                     fields = {}
                     if can_transition(current_status, TaskStatus.YOU_TODO):
                         fields = {"status": TaskStatus.YOU_TODO, "progress": None}
-                    cap_task = await tasks_repo.apply_patch(conn, row, fields)
+                    # コスト上限による戻しはポリシー起因（#28: 降格はしない）
+                    cap_task = await tasks_repo.apply_patch(
+                        conn, row, fields, actor="policy"
+                    )
                     capped = (cap_comment, cap_task, spent, policy.cost_cap_usd)
 
             if capped is None:

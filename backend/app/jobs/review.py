@@ -201,7 +201,7 @@ async def _revise(
                 "progress": 0,
                 "lane_key": LaneKey.PROGRESS,
             }
-        task = await tasks_repo.apply_patch(conn, row, fields)
+        task = await tasks_repo.apply_patch(conn, row, fields, actor="ai")
         exec_job_row = await ai_jobs_repo.create_job(
             conn,
             row,
@@ -274,7 +274,7 @@ async def _finalize_handoff(
                 "progress": None,
                 "lane_key": LaneKey.REVIEW,
             }
-        task = await tasks_repo.apply_patch(conn, row, fields)
+        task = await tasks_repo.apply_patch(conn, row, fields, actor="ai")
         # L3（#21）: you_review → done を連鎖適用（§5.6 の承認遷移をそのまま使う）
         auto_comment = None
         done_task = None
@@ -298,6 +298,7 @@ async def _finalize_handoff(
                         "progress": None,
                         "lane_key": LaneKey.DONE,
                     },
+                    actor="ai",
                 )
         await _mark_succeeded(conn, job_id, result)
     publish_event(COMMENT_CREATED, review_comment.model_dump(mode="json", by_alias=True))
@@ -346,7 +347,7 @@ async def _handle_failure(job_id: str, error: Exception) -> None:
                 "progress": None,
                 "lane_key": LaneKey.REVIEW,
             }
-        task = await tasks_repo.apply_patch(conn, row, fields)
+        task = await tasks_repo.apply_patch(conn, row, fields, actor="ai")
     publish_event(COMMENT_CREATED, comment.model_dump(mode="json", by_alias=True))
     publish_event(TASK_UPDATED, task.model_dump(mode="json", by_alias=True))
 

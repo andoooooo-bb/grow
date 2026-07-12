@@ -78,7 +78,8 @@ async def patch_task(human_id: str, payload: TaskPatch) -> Task:
             fields["progress"] = None  # §5.6: ai_work 以外へ遷移したら自動 null 化
 
         try:
-            task = await tasks_repo.apply_patch(conn, row, fields)
+            # PATCH はボード操作＝人の操作（#28: 差し戻し遷移なら autonomy 自動降格）
+            task = await tasks_repo.apply_patch(conn, row, fields, actor="human")
         except tasks_repo.InvalidParentError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
