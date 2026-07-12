@@ -66,7 +66,16 @@ export function ArtifactSection({ task, canAssignAi }: ArtifactSectionProps) {
   return (
     <section className="artifact">
       <div className="artifact__heading">
-        <span className="artifact__title">成果物（レポート）</span>
+        <span className="artifact__title">
+          成果物（レポート）
+          {current.version === latest.version ? (
+            <span className="artifact__version-badge">最新 v{latest.version}</span>
+          ) : (
+            <span className="artifact__version-badge artifact__version-badge--old">
+              v{current.version} を表示（最新 v{latest.version}）
+            </span>
+          )}
+        </span>
         <div className="artifact__controls">
           {/* #20: 差分トグル（直前版がある版のみ。編集中は隠す） */}
           {editText === null && previous !== undefined && (
@@ -95,6 +104,21 @@ export function ArtifactSection({ task, canAssignAi }: ArtifactSectionProps) {
           )}
         </div>
       </div>
+      {/* 複数版 = AIが見直して改善した証跡。差分で変化を確認できることを明示（#20/レビューUX） */}
+      {editText === null && artifacts.length > 1 && (
+        <p className="artifact__revision-hint">
+          AIが {artifacts.length - 1} 回見直して改善しました（全 {artifacts.length} 版）。
+          <button
+            type="button"
+            className="artifact__hint-link"
+            onClick={() => {
+              if (previous !== undefined) setShowDiff(true);
+            }}
+          >
+            {showDiff ? '差分を表示中' : '差分を見る'}
+          </button>
+        </p>
+      )}
       {/* #20: 由来ルールチップ（例 K-01）。ツールチップでルール文、クリックでナレッジへ */}
       {editText === null && appliedRuleIds.length > 0 && (
         <div className="artifact__rules" aria-label="この版に適用されたルール">

@@ -556,10 +556,14 @@ describe('適用ルール・成果物セクションの組み込み（#10: §3.3
     const { container } = render(<Drawer />);
 
     expect(screen.getByText('◈ AIが着手時に前提にするルール')).toBeInTheDocument();
-    // 配置: アクションバーの直後（§3.3.2 (b) の位置）
+    // 配置（§3.3.2）: アクションバーは上部固定、その下のスクロール領域の先頭が適用ルール、
+    // コンポーザは最下部固定（レビュー操作とコメント欄が常に見えるレイアウト）
     const detail = container.querySelector('.drawer__detail');
     expect(detail?.children[0]).toHaveClass('action-bar');
-    expect(detail?.children[1]).toHaveClass('applied-rules');
+    const scroll = detail?.children[1];
+    expect(scroll).toHaveClass('drawer__scroll');
+    expect(scroll?.children[0]).toHaveClass('applied-rules');
+    expect(detail?.children[2]).toHaveClass('composer');
     await waitForLoaded('T-104');
   });
 

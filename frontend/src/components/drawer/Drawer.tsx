@@ -69,7 +69,9 @@ export function Drawer() {
         <ChatMode task={task} />
       ) : (
         <div className="drawer__detail">
-          {/* markDone 結線（#8）・startChat 結線（#12）。done カードでは「完了にする」を出さない（§03） */}
+          {/* アクションバーは上部にピン留め（長いスレッドでもレビュー操作＝差し戻す/
+              完了にする が常に見える）。markDone 結線（#8）・startChat 結線（#12）。
+              done カードでは「完了にする」を出さない（§03） */}
           <ActionBar
             onAssignAi={() => void assignAi(task.id)}
             assignAiDisabled={!canAssignAi}
@@ -85,21 +87,26 @@ export function Drawer() {
             }
             rejectDisabled={rejecting}
           />
-          {/* (b) 適用ルール（§3.3.2b, #10）: retrieval 0件時はコンポーネント側で非表示 */}
-          <AppliedRules task={task} />
-          {/* (c) 学習（§3.3.2c, #14）: 完了系（you_review/reviewing/done）以外は非表示 */}
-          <LearnSection task={task} />
-          {/* (c-2') ライブ実況（#24）: ai_work 中の生成途中テキスト。完了で (c-2) に差し替わる */}
-          <LiveDraftSection task={task} />
-          {/* (c-2) 成果物（§3.3.2 c-2, #10）: 学習(c)と サブタスク(d) の間に置く */}
-          <ArtifactSection task={task} canAssignAi={canAssignAi} />
-          {/* (d) サブタスク（§3.3.2d, #12）: childIds が無ければコンポーネント側で非表示 */}
-          <SubtaskSection task={task} />
-          {/* (d-2) リレー・タイムライン（#19）: ジョブ0件時はコンポーネント側で非表示 */}
-          <AgentTimeline task={task} />
-          {/* (d-3) 意思決定トレース（#25）: 版0件時はコンポーネント側で非表示（既定は閉） */}
-          <TraceSection task={task} />
-          <ActivityThread taskId={task.id} />
+          {/* 中央のみスクロール。ヘッダ・アクションバー・コンポーザは固定して
+              「レビューできない/コメント欄が見つからない」を防ぐ（§3.3.2） */}
+          <div className="drawer__scroll">
+            {/* (b) 適用ルール（§3.3.2b, #10）: retrieval 0件時はコンポーネント側で非表示 */}
+            <AppliedRules task={task} />
+            {/* (c) 学習（§3.3.2c, #14）: 完了系（you_review/reviewing/done）以外は非表示 */}
+            <LearnSection task={task} />
+            {/* (c-2') ライブ実況（#24）: ai_work 中の生成途中テキスト。完了で (c-2) に差し替わる */}
+            <LiveDraftSection task={task} />
+            {/* (c-2) 成果物（§3.3.2 c-2, #10）: 学習(c)と サブタスク(d) の間に置く */}
+            <ArtifactSection task={task} canAssignAi={canAssignAi} />
+            {/* (d) サブタスク（§3.3.2d, #12）: childIds が無ければコンポーネント側で非表示 */}
+            <SubtaskSection task={task} />
+            {/* (d-2) リレー・タイムライン（#19）: ジョブ0件時はコンポーネント側で非表示 */}
+            <AgentTimeline task={task} />
+            {/* (d-3) 意思決定トレース（#25）: 版0件時はコンポーネント側で非表示（既定は閉） */}
+            <TraceSection task={task} />
+            <ActivityThread taskId={task.id} />
+          </div>
+          {/* コンポーザは最下部にピン留め（常に入力できる, §3.3.2f） */}
           <Composer taskId={task.id} />
         </div>
       )}

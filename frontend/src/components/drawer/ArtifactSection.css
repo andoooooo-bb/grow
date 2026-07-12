@@ -298,3 +298,35 @@
   background: #f6f8fa;
   font-weight: 600;
 }
+
+/* 版バッジ・修正ヒント（レビューUX: 何版目か・何回見直したかを明示） */
+.artifact__version-badge {
+  margin-left: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--color-teal-dark, #0b7a72);
+  background: var(--color-teal-bg, #e1f3f1);
+  border-radius: var(--radius-badge, 5px);
+  padding: 2px 7px;
+  font-family: var(--font-mono);
+}
+.artifact__version-badge--old {
+  color: var(--color-amber-text2, #b5781f);
+  background: var(--color-amber-bg2, #fcefe0);
+}
+.artifact__revision-hint {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--color-text-weak, #8a909a);
+  line-height: 1.6;
+}
+.artifact__hint-link {
+  border: none;
+  background: none;
+  padding: 0 0 0 4px;
+  color: var(--color-purple, #5d4eb0);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+}
