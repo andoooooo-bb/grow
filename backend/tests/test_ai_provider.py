@@ -498,3 +498,42 @@ async def test_check_rule_conflicts_returns_empty_for_unrelated_reason(
 async def test_check_rule_conflicts_returns_empty_without_rules(provider: MockProvider):
     result = await provider.check_rule_conflicts("ルールとは逆にしてください", [])
     assert result.rule_ids == []
+
+
+# --- generalize_rule_text（#29 チーム昇格DLPガード。決定的な伏字リライト） ---
+
+
+async def test_generalize_rule_text_masks_findings(provider: MockProvider):
+    """findings の quote を「◯◯」へ置換し、末尾に「（一般化済み）」を付ける。"""
+    from app.ai.mock_provider import GENERALIZE_MASK, GENERALIZE_SUFFIX
+
+    text = "田中様のメール a@b.co に送る"
+    findings = [
+        {"infoType": "PERSON_NAME", "quote": "田中"},
+        {"infoType": "EMAIL_ADDRESS", "quote": "a@b.co"},
+    ]
+    result = await provider.generalize_rule_text(text, findings)
+    assert result.text == f"{GENERALIZE_MASK}様のメール {GENERALIZE_MASK} に送る{GENERALIZE_SUFFIX}"
+    assert "田中" not in result.text
+    assert "a@b.co" not in result.text
+    _assert_positive_usage(result.usage)
+
+
+async def test_generalize_rule_text_is_deterministic(provider: MockProvider):
+    """同じ入力には常に同じ文案を返す（テスト・デモの再現性）。"""
+    text = "山田様へ 090-1111-2222 で連絡"
+    findings = [
+        {"infoType": "PERSON_NAME", "quote": "山田"},
+        {"infoType": "PHONE_NUMBER", "quote": "090-1111-2222"},
+    ]
+    first = await provider.generalize_rule_text(text, findings)
+    second = await provider.generalize_rule_text(text, findings)
+    assert first.text == second.text
+
+
+async def test_generalize_rule_text_no_findings_just_suffix(provider: MockProvider):
+    """findings が空なら本文はそのまま＋サフィックスのみ付く。"""
+    from app.ai.mock_provider import GENERALIZE_SUFFIX
+
+    result = await provider.generalize_rule_text("クリーンな文", [])
+    assert result.text == f"クリーンな文{GENERALIZE_SUFFIX}"

@@ -14,6 +14,7 @@ import {
   createTask,
   dismissKnowledgeProposal as dismissKnowledgeProposalRequest,
   dismissLearn as dismissLearnRequest,
+  generalizeRule as generalizeRuleRequest,
   getArtifacts,
   getComments,
   getJobs,
@@ -23,6 +24,7 @@ import {
   getTrace,
   patchTask,
   promoteRule as promoteRuleRequest,
+  PromoteBlockedError,
   rejectTask as rejectTaskRequest,
   runKnowledgeCi as runKnowledgeCiRequest,
   sendChatMessage,
@@ -32,6 +34,7 @@ import { canTransition } from '../lib/stateMachine.ts';
 import type {
   ArtifactDeltaEvent,
   BoardResponse,
+  DlpFinding,
   KnowledgeProposal,
   LaneDto,
   RuleProposalCreatedEvent,
@@ -71,6 +74,19 @@ export interface ActivityEntry {
 
 /** #19 ライブフィードの保持上限（最新100件のリングバッファ） */
 export const ACTIVITY_LIMIT = 100;
+
+/**
+ * #29 チーム昇格DLPガードの状態。機微情報スキャンで昇格が 409 になったとき開く
+ * 警告モーダルの内容。phase で「警告 → AI一般化 → 文案編集 → 再昇格」を進める。
+ */
+export interface PromoteGuard {
+  ruleId: string; // 昇格しようとしたルール（K-xx）
+  ruleText: string; // 元のルール文（警告時に対比表示）
+  findings: DlpFinding[]; // 検出された機微情報（種別・該当文字列）
+  generalized: string | null; // AI一般化文案（未取得は null）
+  // warn=警告表示 / generalizing=一般化中 / edit=文案編集 / promoting=再昇格中
+  phase: 'warn' | 'generalizing' | 'edit' | 'promoting';
+}
 
 /** §2.3 フロント状態ストア形（正規化） */
 export interface BoardState {
@@ -121,6 +137,8 @@ export interface BoardState {
   ciRunning: boolean;
   // #26: 手動実行完了のトースト文言（null = 非表示。オーバーレイを閉じるとクリア）
   ciNotice: string | null;
+  // #29: チーム昇格DLPガードの警告モーダル状態（null = 閉じている）
+  promoteGuard: PromoteGuard | null;
 }
 
 export interface BoardActions {
@@ -252,8 +270,23 @@ export interface BoardActions {
   /**
    * §1.8 promoteRule: POST /rules/:id/promote → 応答（scope=team）を isNew=true で
    * upsert（NEW 再表示）。ナレッジ・オーバーレイの「チームのルール」へ移る。
+   * #29 DLPガードレール: 機微情報検出（409）なら昇格せず promoteGuard を開く。
    */
   promoteRule: (ruleId: string) => Promise<void>;
+
+  // ---- チーム昇格DLPガードレール（#29 §6.7） ----
+  /** ガードモーダルを閉じる（キャンセル / 昇格成功時にクリア） */
+  closePromoteGuard: () => void;
+  /**
+   * POST /rules/:id/generalize で AI 一般化文案を取得し、モーダルを編集フェーズへ進める。
+   * 実行中は phase='generalizing'。失敗は phase を warn へ戻し boardError。
+   */
+  generalizePromote: () => Promise<void>;
+  /**
+   * 編集した文案で再昇格する（POST /rules/:id/promote {text}）。成功でガードを閉じ
+   * ルールを isNew=true で upsert。再び機微情報が残っていれば 409 → findings 更新。
+   */
+  confirmPromoteWithText: (text: string) => Promise<void>;
 
   // ---- 夜間ナレッジCI受信箱（#26 / §6.4b/c） ----
   /** GET /api/knowledge/proposals で受信箱を読み込む（オーバーレイを開いたとき）。失敗は前回値 */
@@ -345,6 +378,7 @@ export function createInitialBoardState(): BoardState {
     proposals: [],
     ciRunning: false,
     ciNotice: null,
+    promoteGuard: null,
   };
 }
 
@@ -419,8 +453,9 @@ export const useBoardStore = create<BoardStore>()((set, get) => ({
   closePanel: () => set({ selectedId: null }),
   setPanelMode: (mode) => set({ panelMode: mode }),
   openKnowledge: () => set({ showKnowledge: true }),
-  // 閉じるときに完了トースト（#26 ciNotice）も消す（次回開いたときの残骸を防ぐ）
-  closeKnowledge: () => set({ showKnowledge: false, ciNotice: null }),
+  // 閉じるときに完了トースト（#26 ciNotice）と昇格ガード（#29）も消す（残骸を防ぐ）
+  closeKnowledge: () =>
+    set({ showKnowledge: false, ciNotice: null, promoteGuard: null }),
   setDraft: (taskId, text) =>
     set((s) => ({ drafts: { ...s.drafts, [taskId]: text } })),
   setChatDraft: (taskId, text) =>
@@ -930,9 +965,87 @@ export const useBoardStore = create<BoardStore>()((set, get) => ({
     try {
       const promoted = await promoteRuleRequest(ruleId);
       // NEW 再表示（§5.3 promoteRule: isNew=true）。冪等時（既に team）も応答で確定する
-      set((st) => ({ rules: upsertRule(st.rules, { ...promoted, isNew: true }) }));
-    } catch {
+      set((st) => ({
+        rules: upsertRule(st.rules, { ...promoted, isNew: true }),
+        promoteGuard: null,
+      }));
+    } catch (err) {
+      // #29: 機微情報検出（409）なら昇格せず警告モーダルを開く（findings 表示）
+      if (err instanceof PromoteBlockedError) {
+        const rule = get().rules.find((r) => r.id === ruleId);
+        set({
+          promoteGuard: {
+            ruleId,
+            ruleText: rule?.text ?? '',
+            findings: err.findings,
+            generalized: null,
+            phase: 'warn',
+          },
+        });
+        return;
+      }
       set({ boardError: 'チームへの昇格に失敗しました' });
+    }
+  },
+
+  // ---- チーム昇格DLPガードレール（#29 §6.7） ----
+  closePromoteGuard: () => set({ promoteGuard: null }),
+  generalizePromote: async () => {
+    const guard = get().promoteGuard;
+    if (guard === null) return;
+    set({ boardError: null, promoteGuard: { ...guard, phase: 'generalizing' } });
+    try {
+      const res = await generalizeRuleRequest(guard.ruleId);
+      set((st) =>
+        st.promoteGuard === null
+          ? {}
+          : {
+              promoteGuard: {
+                ...st.promoteGuard,
+                generalized: res.generalized,
+                phase: 'edit',
+              },
+            },
+      );
+    } catch {
+      set((st) => ({
+        boardError: 'AIによる一般化に失敗しました',
+        promoteGuard:
+          st.promoteGuard === null ? null : { ...st.promoteGuard, phase: 'warn' },
+      }));
+    }
+  },
+  confirmPromoteWithText: async (text) => {
+    const guard = get().promoteGuard;
+    if (guard === null) return;
+    set({ boardError: null, promoteGuard: { ...guard, phase: 'promoting' } });
+    try {
+      const promoted = await promoteRuleRequest(guard.ruleId, text);
+      set((st) => ({
+        rules: upsertRule(st.rules, { ...promoted, isNew: true }),
+        promoteGuard: null,
+      }));
+    } catch (err) {
+      // 一般化しても機微情報が残っていれば 409 → findings を差し替えて編集を続けさせる
+      if (err instanceof PromoteBlockedError) {
+        set((st) =>
+          st.promoteGuard === null
+            ? {}
+            : {
+                promoteGuard: {
+                  ...st.promoteGuard,
+                  findings: err.findings,
+                  phase: 'edit',
+                },
+              },
+        );
+        return;
+      }
+      set((st) => ({
+        boardError: 'チームへの昇格に失敗しました',
+        promoteGuard:
+          st.promoteGuard === null ? null : { ...st.promoteGuard, phase: 'edit' },
+      }));
     }
   },
 

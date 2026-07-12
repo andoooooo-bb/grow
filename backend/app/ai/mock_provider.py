@@ -20,6 +20,7 @@ from app.ai.provider import (
     CiProposal,
     DeepDiveResult,
     ExecuteResult,
+    GeneralizeResult,
     IntakeRoute,
     NextAction,
     NextActionResult,
@@ -633,6 +634,36 @@ class MockProvider(AiProvider):
                 source_task_id=str(human_id),
             )
         ]
+
+    # ---- チーム昇格DLPガードレール（#29。並行 Wave との衝突回避のためクラス末尾） ----
+
+    async def generalize_rule_text(
+        self, text: str, findings: list[dict]
+    ) -> GeneralizeResult:
+        """一般化リライト（#29）: findings の quote を伏字に置換する決定的モック。
+
+        検出された該当文字列（quote）を GENERALIZE_MASK（「◯◯」）へ置き換え、
+        末尾に GENERALIZE_SUFFIX を付けて「一般化済み」であることを明示する。
+        同じ入力には常に同じ出力（テスト・デモで再現可能）。
+        """
+        generalized = text
+        for finding in findings:
+            quote = str(finding.get("quote") or "")
+            if quote:
+                generalized = generalized.replace(quote, GENERALIZE_MASK)
+        generalized = f"{generalized}{GENERALIZE_SUFFIX}"
+        return GeneralizeResult(
+            text=generalized, usage=self._usage(generalized, text, findings)
+        )
+
+
+# --- チーム昇格DLPガードレール（#29）の決定的な文言 -----------------------------------
+
+# 機微情報（quote）の伏字。人が textarea で適切な一般名詞に書き換える前提のプレースホルダ
+GENERALIZE_MASK = "◯◯"
+
+# 一般化済みであることを示す末尾サフィックス（mock の決定的マーカー）
+GENERALIZE_SUFFIX = "（一般化済み）"
 
 
 # --- 夜間ナレッジCI（#26）の決定的な文言・しきい値 -----------------------------------

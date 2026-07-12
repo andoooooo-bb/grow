@@ -13,6 +13,7 @@ dependencies = [
     "google-cloud-tasks>=2.18",
     "google-genai>=1.0",
     "httpx>=0.28",
+    "google-cloud-dlp>=3.38.0",
 ]
 
 [dependency-groups]

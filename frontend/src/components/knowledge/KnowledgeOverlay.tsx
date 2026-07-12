@@ -20,6 +20,7 @@ import type {
 } from '../../types/api.ts';
 import type { Rule } from '../../types/domain.ts';
 import './KnowledgeOverlay.css';
+import { PromoteGuardModal } from './PromoteGuardModal.tsx';
 
 // ナレッジ空のセクション文言（§5.5）
 export const KNOWLEDGE_EMPTY_TEXT =
@@ -288,7 +289,8 @@ export function KnowledgeOverlay() {
   const ruleById = new Map(rules.map((r) => [r.id, r] as const));
 
   return (
-    // 遮蔽クリックで閉じる（§3.4）。パネル側は stopPropagation（§5.3 stop）
+    <>
+    {/* 遮蔽クリックで閉じる（§3.4）。パネル側は stopPropagation（§5.3 stop） */}
     <div className="knowledge" onClick={closeKnowledge}>
       <div
         className="knowledge__panel"
@@ -434,5 +436,8 @@ export function KnowledgeOverlay() {
         )}
       </div>
     </div>
+    {/* #29: チーム昇格DLPガード。`.knowledge` の兄弟にして遮蔽クリックの伝播を分離する */}
+    <PromoteGuardModal />
+    </>
   );
 }

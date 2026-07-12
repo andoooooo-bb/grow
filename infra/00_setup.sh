@@ -34,6 +34,7 @@ gcloud services enable \
   secretmanager.googleapis.com \
   artifactregistry.googleapis.com \
   cloudbuild.googleapis.com \
+  dlp.googleapis.com \
   --project "$PROJECT_ID"
 
 echo "== [2/5] Artifact Registry リポジトリ: ${AR_REPO} (${REGION})"
@@ -62,12 +63,14 @@ fi
 #   cloudtasks.enqueuer       — AIジョブの enqueue（app/jobs/queue.py）
 #   cloudsql.client           — Cloud SQL unix socket 接続（--add-cloudsql-instances）
 #   secretmanager.secretAccessor — DATABASE_URL / INTERNAL_JOBS_TOKEN の参照
+#   dlp.user                  — Sensitive Data Protection inspect_content（#29 昇格DLPガード）
 # SA 作成直後は結果整合性で "does not exist" になることがあるためリトライする
 for role in \
   roles/aiplatform.user \
   roles/cloudtasks.enqueuer \
   roles/cloudsql.client \
-  roles/secretmanager.secretAccessor; do
+  roles/secretmanager.secretAccessor \
+  roles/dlp.user; do
   for attempt in 1 2 3 4 5; do
     if gcloud projects add-iam-policy-binding "$PROJECT_ID" \
       --member "serviceAccount:${SA_EMAIL}" \

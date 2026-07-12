@@ -266,6 +266,18 @@ class AiProvider(ABC):
         実装は既存の chat_reply / propose_subtasks を内部で合成してもよい。
         """
 
+    @abstractmethod
+    async def generalize_rule_text(
+        self, text: str, findings: list[dict]
+    ) -> "GeneralizeResult":
+        """一般化リライト（#29 §6.7）: 機微情報を除去したルール文案を返す。
+
+        チーム昇格が DLP ガードで 409 になったとき、固有名詞・機微情報
+        （findings: {"infoType", "quote"} のリスト）を含まない一般化された
+        ルール文案を作る。永続化は呼び出し側でも行わない — 人が文案を確認・
+        編集してから text 付き promote で再昇格する（人の承認が最終ゲート）。
+        """
+
 
 # ---- 夜間ナレッジCI（#26）の構造化出力 ---------------------------------------------
 # 並行開発（#27 が同ファイル上部に追記する）とのコンフリクトを避けるため、
@@ -343,4 +355,18 @@ class DeepDiveResult:
     mode: DeepDiveMode
     text: str
     subtasks: list[SubtaskProposal]
+    usage: TokenUsage
+
+
+# ---- チーム昇格DLPガードレール（#29。並行 Wave との衝突回避のため末尾追記） ----------
+
+
+@dataclass(frozen=True, slots=True)
+class GeneralizeResult:
+    """一般化リライト（#29 generalize_rule_text）の構造化出力。
+
+    text は固有名詞・機微情報を除去した一般化ルール文案（永続化しない）。
+    """
+
+    text: str
     usage: TokenUsage

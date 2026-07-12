@@ -1298,6 +1298,131 @@ describe('learn / rule actions（#14）', () => {
   });
 });
 
+// ---- チーム昇格DLPガードレール（#29 §6.7） ----
+
+describe('promoteRule DLPガード（#29）', () => {
+  beforeEach(() => {
+    useBoardStore.setState({ ...createInitialBoardState(), ...boardFixture() });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const findings = [
+    { infoType: 'PERSON_NAME', quote: '田中' },
+    { infoType: 'EMAIL_ADDRESS', quote: 'a@b.co' },
+  ];
+
+  it('409（機微情報検出）で昇格せず promoteGuard を開き findings を保持する', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse(409, { detail: 'blocked', findings })),
+    );
+    await useBoardStore.getState().promoteRule('K-01');
+
+    const s = useBoardStore.getState();
+    expect(s.rules.find((r) => r.id === 'K-01')?.scope).toBe('personal'); // 昇格していない
+    expect(s.boardError).toBeNull(); // 409 は boardError にしない
+    expect(s.promoteGuard).not.toBeNull();
+    expect(s.promoteGuard?.ruleId).toBe('K-01');
+    expect(s.promoteGuard?.findings).toEqual(findings);
+    expect(s.promoteGuard?.phase).toBe('warn');
+  });
+
+  it('generalizePromote: 一般化文案を取得し phase=edit に進む', async () => {
+    useBoardStore.setState({
+      promoteGuard: {
+        ruleId: 'K-01',
+        ruleText: '田中様へ',
+        findings,
+        generalized: null,
+        phase: 'warn',
+      },
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        jsonResponse(200, { original: '田中様へ', generalized: '担当者へ（一般化済み）' }),
+      ),
+    );
+    await useBoardStore.getState().generalizePromote();
+
+    expect(fetch).toHaveBeenCalledWith('/api/rules/K-01/generalize', { method: 'POST' });
+    const s = useBoardStore.getState();
+    expect(s.promoteGuard?.phase).toBe('edit');
+    expect(s.promoteGuard?.generalized).toBe('担当者へ（一般化済み）');
+  });
+
+  it('confirmPromoteWithText: text 付きで昇格し成功でガードを閉じる（NEW 付き team へ）', async () => {
+    const target = boardFixture().rules.find((r) => r.id === 'K-01')!;
+    useBoardStore.setState({
+      promoteGuard: {
+        ruleId: 'K-01',
+        ruleText: '田中様へ',
+        findings,
+        generalized: '担当者へ（一般化済み）',
+        phase: 'edit',
+      },
+    });
+    const fetchMock = vi.fn(async () =>
+      jsonResponse(200, { ...target, scope: 'team', text: '担当者へ（一般化済み）' }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await useBoardStore.getState().confirmPromoteWithText('担当者へ（一般化済み）');
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/rules/K-01/promote', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: '担当者へ（一般化済み）' }),
+    });
+    const s = useBoardStore.getState();
+    expect(s.promoteGuard).toBeNull(); // ガードを閉じた
+    const promoted = s.rules.find((r) => r.id === 'K-01');
+    expect(promoted?.scope).toBe('team');
+    expect(promoted?.text).toBe('担当者へ（一般化済み）');
+    expect(promoted?.isNew).toBe(true);
+  });
+
+  it('confirmPromoteWithText: 機微情報が残り 409 なら findings を差し替え edit に留まる', async () => {
+    useBoardStore.setState({
+      promoteGuard: {
+        ruleId: 'K-01',
+        ruleText: '田中様へ',
+        findings,
+        generalized: '山田様へ',
+        phase: 'edit',
+      },
+    });
+    const nextFindings = [{ infoType: 'PERSON_NAME', quote: '山田' }];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse(409, { detail: 'blocked', findings: nextFindings })),
+    );
+    await useBoardStore.getState().confirmPromoteWithText('山田様へ');
+
+    const s = useBoardStore.getState();
+    expect(s.promoteGuard?.phase).toBe('edit');
+    expect(s.promoteGuard?.findings).toEqual(nextFindings);
+    expect(s.rules.find((r) => r.id === 'K-01')?.scope).toBe('personal');
+  });
+
+  it('closePromoteGuard でガードを閉じる', () => {
+    useBoardStore.setState({
+      promoteGuard: {
+        ruleId: 'K-01',
+        ruleText: 'x',
+        findings,
+        generalized: null,
+        phase: 'warn',
+      },
+    });
+    useBoardStore.getState().closePromoteGuard();
+    expect(useBoardStore.getState().promoteGuard).toBeNull();
+  });
+});
+
 // ---- ルール適用フラッシュ（#20: justApplied） ----
 
 describe('justApplied（#20 ルール適用フラッシュ）', () => {

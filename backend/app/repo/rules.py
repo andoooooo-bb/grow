@@ -311,3 +311,21 @@ async def add_feedback(
         tags,
         confidence.value,
     )
+
+
+# ---- チーム昇格DLPガードレール（#29。並行 Wave との衝突回避のため末尾追記） ----------
+
+
+async def update_rule_text(
+    conn: asyncpg.Connection, row: asyncpg.Record, text: str
+) -> asyncpg.Record:
+    """ルール文を差し替える（#29 一般化文案での再昇格）。更新後の行を返す。
+
+    トランザクション内・行ロック（get_rule_by_human_id for_update=True）取得済みで
+    呼ぶこと。呼び出し側（promote）が DLP スキャン通過を確認してから使う。
+    """
+    return await conn.fetchrow(
+        "update rules set text = $2, updated_at = now() where id = $1 returning *",
+        row["id"],
+        text,
+    )

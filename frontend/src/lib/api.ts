@@ -9,6 +9,8 @@ import type {
   BreakdownConfirmResponse,
   ChatSendRequest,
   CommentCreate,
+  DlpFinding,
+  GeneralizeResponse,
   JobsResponse,
   KnowledgeAdoptResponse,
   KnowledgeCiRunResponse,
@@ -31,6 +33,20 @@ export class ApiError extends Error {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+  }
+}
+
+/**
+ * チーム昇格が機微情報スキャンでブロックされた（#29 DLPガードレール, 409）。
+ * findings に検出された機微情報の種別・該当文字列を持つ（警告モーダルで表示する）。
+ */
+export class PromoteBlockedError extends Error {
+  readonly findings: DlpFinding[];
+
+  constructor(findings: DlpFinding[]) {
+    super('promote blocked by DLP guardrail');
+    this.name = 'PromoteBlockedError';
+    this.findings = findings;
   }
 }
 
@@ -211,9 +227,41 @@ export async function dismissLearn(
   }
 }
 
-/** 個人ルールをチームへ昇格する（#14 §1.8 promoteRule）。200 で scope=team の Rule（冪等）。 */
-export function promoteRule(ruleId: string): Promise<Rule> {
-  return request<Rule>(`/api/rules/${ruleId}/promote`, { method: 'POST' });
+/**
+ * 個人ルールをチームへ昇格する（#14 §1.8 promoteRule / #29 DLPガードレール §6.7）。
+ * 200 で scope=team の Rule（冪等）。text 省略時は body なし（既存契約を維持）。
+ * text 指定時は機微情報スキャン通過後に text を更新してから昇格する。
+ * 機微情報が検出された場合は 409 → PromoteBlockedError（findings 付き）を投げる。
+ */
+export async function promoteRule(ruleId: string, text?: string): Promise<Rule> {
+  const path = `/api/rules/${ruleId}/promote`;
+  const init: RequestInit =
+    text === undefined
+      ? { method: 'POST' }
+      : {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+        };
+  const res = await fetch(path, init);
+  if (res.status === 409) {
+    const body = (await res.json().catch(() => null)) as { findings?: DlpFinding[] } | null;
+    throw new PromoteBlockedError(Array.isArray(body?.findings) ? body.findings : []);
+  }
+  if (!res.ok) {
+    throw new ApiError(res.status, `POST ${path} failed with status ${res.status}`);
+  }
+  return (await res.json()) as Rule;
+}
+
+/**
+ * 機微情報を除去した一般化ルール文案を作らせる（#29 §6.7 generalize）。
+ * 200 で {original, generalized} を返す（サーバは永続化しない）。
+ */
+export function generalizeRule(ruleId: string): Promise<GeneralizeResponse> {
+  return request<GeneralizeResponse>(`/api/rules/${ruleId}/generalize`, {
+    method: 'POST',
+  });
 }
 
 // ---- 夜間ナレッジCI（#26 受信箱・手動実行） ----

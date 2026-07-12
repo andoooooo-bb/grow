@@ -481,6 +481,116 @@ describe('KnowledgeOverlay: 今すぐメンテナンス実行（#26）', () => {
   });
 });
 
+// ---- #29: チーム昇格DLPガードレール（409 → 警告モーダル → 一般化 → 再昇格） ----
+
+describe('KnowledgeOverlay: 昇格DLPガード（#29）', () => {
+  const findings = [
+    { infoType: 'EMAIL_ADDRESS', quote: 'a@b.co' },
+    { infoType: 'PERSON_NAME', quote: '田中' },
+  ];
+
+  it('昇格が 409 なら警告モーダルを開き findings（種別・該当文字列）を表示する', async () => {
+    const fetchMock = vi.fn(async (path: string) =>
+      path === '/api/rules/K-01/promote'
+        ? jsonResponse(409, { detail: '機微情報が含まれるためチーム昇格できません', findings })
+        : jsonResponse(200, { unexpected: true }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<KnowledgeOverlay />);
+    fireEvent.click(screen.getAllByRole('button', { name: 'チームへ昇格 ↑' })[0]);
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('機微情報が含まれるためチーム昇格できません'),
+      ).toBeInTheDocument(),
+    );
+    // findings の種別（日本語ラベル）と該当文字列
+    expect(screen.getByText('メールアドレス')).toBeInTheDocument();
+    expect(screen.getByText('人名')).toBeInTheDocument();
+    expect(screen.getByText('a@b.co')).toBeInTheDocument();
+    expect(screen.getByText('田中')).toBeInTheDocument();
+    // まだ昇格していない（K-01 は personal のまま）
+    expect(useBoardStore.getState().rules.find((r) => r.id === 'K-01')?.scope).toBe(
+      'personal',
+    );
+  });
+
+  it('「AIに一般化させる」→ generalize → textarea 表示 →「この内容で昇格」で team 化', async () => {
+    const target = rule('K-01');
+    const fetchMock = vi.fn(async (path: string, init?: RequestInit) => {
+      if (path === '/api/rules/K-01/promote') {
+        // body なし = 初回昇格（ブロック）/ body あり = 一般化文案での再昇格（成功）
+        return init?.body === undefined
+          ? jsonResponse(409, { detail: 'blocked', findings })
+          : jsonResponse(200, { ...target, scope: 'team', text: '担当者へ送る（一般化済み）' });
+      }
+      if (path === '/api/rules/K-01/generalize') {
+        return jsonResponse(200, {
+          original: target.text,
+          generalized: '担当者へ送る（一般化済み）',
+        });
+      }
+      return jsonResponse(200, { unexpected: true });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<KnowledgeOverlay />);
+    fireEvent.click(screen.getAllByRole('button', { name: 'チームへ昇格 ↑' })[0]);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'AIに一般化させる' })).toBeInTheDocument(),
+    );
+
+    // AI一般化 → 編集可能な textarea に文案が入る
+    fireEvent.click(screen.getByRole('button', { name: 'AIに一般化させる' }));
+    const textarea = await screen.findByRole('textbox');
+    await waitFor(() =>
+      expect((textarea as HTMLTextAreaElement).value).toBe('担当者へ送る（一般化済み）'),
+    );
+    expect(fetchMock).toHaveBeenCalledWith('/api/rules/K-01/generalize', {
+      method: 'POST',
+    });
+
+    // この内容で昇格 → text 付き promote → team 化・モーダルが閉じる
+    fireEvent.click(screen.getByRole('button', { name: 'この内容で昇格' }));
+    await waitFor(() =>
+      expect(useBoardStore.getState().promoteGuard).toBeNull(),
+    );
+    const promoted = useBoardStore.getState().rules.find((r) => r.id === 'K-01');
+    expect(promoted?.scope).toBe('team');
+    expect(promoted?.text).toBe('担当者へ送る（一般化済み）');
+    expect(fetchMock).toHaveBeenCalledWith('/api/rules/K-01/promote', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: '担当者へ送る（一般化済み）' }),
+    });
+  });
+
+  it('クリーンなルールは 409 にならずモーダルを開かない（従来どおり昇格）', async () => {
+    const target = rule('K-01');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (path: string) =>
+        path === '/api/rules/K-01/promote'
+          ? jsonResponse(200, { ...target, scope: 'team' })
+          : jsonResponse(200, { unexpected: true }),
+      ),
+    );
+    render(<KnowledgeOverlay />);
+    fireEvent.click(screen.getAllByRole('button', { name: 'チームへ昇格 ↑' })[0]);
+
+    await waitFor(() =>
+      expect(useBoardStore.getState().rules.find((r) => r.id === 'K-01')?.scope).toBe(
+        'team',
+      ),
+    );
+    expect(useBoardStore.getState().promoteGuard).toBeNull();
+    expect(
+      screen.queryByText('機微情報が含まれるためチーム昇格できません'),
+    ).not.toBeInTheDocument();
+  });
+});
+
 describe('applyRuleProposalCreated（#26 SSE ライブ更新）', () => {
   it('新提案を受信箱の先頭へ追加し、既知 id は重複させない（冪等）', () => {
     const existing = proposalFixture();

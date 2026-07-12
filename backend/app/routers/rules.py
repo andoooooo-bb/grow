@@ -5,6 +5,12 @@
 - POST /tasks/{human_id}/learn/adopt    候補を採用: rules へ永続化＋feedback 記録＋AIコメント
 - POST /tasks/{human_id}/learn/dismiss  候補を却下: feedback 記録のみ（204）
 - POST /rules/{human_id}/promote        個人ルールをチームへ昇格（scope=team。冪等）
+- POST /rules/{human_id}/generalize     機微情報を除去した一般化文案を返す（#29。非永続）
+
+#29 DLPガードレール（§6.7: 固有名詞・秘密情報をルール文に焼き込まない）:
+昇格前にルール文を機微情報スキャン（app/security/dlp.py — 本番は Cloud DLP、
+mock は正規表現スタブ）し、検出時は 409 {detail, findings} で昇格をブロックする。
+人は AI 一般化（generalize）の文案を確認・編集し、text 付き promote で再昇格する。
 
 人の採用/却下ログ（rule_feedback）は将来の半自動/自動蒸留のお手本データになる（§6.4）。
 NEW バッジ（isNew）はクライアント表示状態であり、サーバは永続化しない（§5.3）。
@@ -15,10 +21,18 @@ from uuid import uuid4
 
 import asyncpg
 from fastapi import APIRouter, HTTPException, Response
+from fastapi.responses import JSONResponse
 
 from app.ai import get_provider
 from app.db import get_pool
-from app.domain.dto import CommentCreate, LearnDecisionRequest, RuleProposalDto
+from app.domain.dto import (
+    CommentCreate,
+    DlpFindingDto,
+    GeneralizeResponse,
+    LearnDecisionRequest,
+    PromoteRuleRequest,
+    RuleProposalDto,
+)
 from app.domain.models import AgentRole, Author, Rule, RuleScope, TaskStatus
 from app.events import (
     COMMENT_CREATED,
@@ -31,8 +45,12 @@ from app.repo import chat as chat_repo
 from app.repo import comments as comments_repo
 from app.repo import rules as rules_repo
 from app.repo import tasks as tasks_repo
+from app.security.dlp import Finding, inspect_rule_text
 
 router = APIRouter(tags=["rules"])
+
+# #29: DLP 検出で昇格をブロックしたときの 409 detail（FE の警告モーダル文言と対）
+PROMOTE_BLOCKED_DETAIL = "機微情報が含まれるためチーム昇格できません"
 
 # 「✧ 学ぶ」が有効になる完了系ステータス（§1.7 step1 / §6.4a トリガー）
 LEARNABLE_STATUSES = frozenset(
@@ -155,27 +173,95 @@ async def dismiss_learn(human_id: str, payload: LearnDecisionRequest) -> Respons
     return Response(status_code=204)
 
 
-# ---- 昇格（promoteRule §1.8） ------------------------------------------------------
+# ---- 昇格（promoteRule §1.8 / #29 DLPガードレール §6.7） ---------------------------
 
 
-@router.post("/rules/{human_id}/promote")
-async def promote_rule(human_id: str) -> Rule:
-    """個人ルールをチームへ昇格する（scope=team）。既に team なら何もせず 200（冪等）。"""
+def _promote_blocked_response(findings: list[Finding]) -> JSONResponse:
+    """#29: 機微情報検出時の 409 応答 {detail, findings:[{infoType, quote}]}。"""
+    return JSONResponse(
+        status_code=409,
+        content={
+            "detail": PROMOTE_BLOCKED_DETAIL,
+            "findings": [
+                DlpFindingDto(info_type=f.info_type, quote=f.quote).model_dump(
+                    by_alias=True
+                )
+                for f in findings
+            ],
+        },
+    )
+
+
+# response_model=Rule を明示: 409 は JSONResponse を直接返すため、返り値注釈から
+# response_model を導出させない（Union[Rule, JSONResponse] は Pydantic field 不可）
+@router.post("/rules/{human_id}/promote", response_model=Rule)
+async def promote_rule(
+    human_id: str, payload: PromoteRuleRequest | None = None
+) -> Rule | JSONResponse:
+    """個人ルールをチームへ昇格する（scope=team）。既に team なら何もせず 200（冪等）。
+
+    #29 DLPガードレール: 昇格前にルール文（payload.text 指定時はその文案）を
+    機微情報スキャンし、検出時は 409 {detail, findings} で昇格をブロックする
+    （text も更新しない）。text 指定かつスキャン通過なら text を更新してから
+    昇格する（AI一般化文案を人が確認・編集した結果の反映）。
+    """
+    new_text = payload.text if payload is not None and payload.text else None
+
     pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await rules_repo.get_rule_by_human_id(conn, human_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"rule not found: {human_id}")
+
+    # スキャン（本番は Cloud DLP の外部呼び出し）は行ロック・トランザクションの外で行う
+    findings = await inspect_rule_text(new_text if new_text is not None else row["text"])
+    if findings:
+        return _promote_blocked_response(findings)
+
     promoted = False
+    text_updated = False
     async with pool.acquire() as conn, conn.transaction():
         row = await rules_repo.get_rule_by_human_id(conn, human_id, for_update=True)
         if row is None:
             raise HTTPException(status_code=404, detail=f"rule not found: {human_id}")
+        if new_text is not None and new_text != row["text"]:
+            row = await rules_repo.update_rule_text(conn, row, new_text)
+            text_updated = True
         if RuleScope(row["scope"]) is RuleScope.TEAM:
             rule = await rules_repo.rule_dto_from_row(conn, row)
         else:
             rule = await rules_repo.promote_rule(conn, row)
             promoted = True
 
-    if promoted:
+    if promoted or text_updated:
         publish_event(RULE_UPDATED, rule.model_dump(mode="json", by_alias=True))
     return rule
+
+
+# ---- AI一般化（#29 §6.7: 固有名詞・秘密情報を除去した文案の提示） --------------------
+
+
+@router.post("/rules/{human_id}/generalize")
+async def generalize_rule(human_id: str) -> GeneralizeResponse:
+    """機微情報を除去した一般化文案を返す（#29。永続化しない）。
+
+    DLP スキャンの findings を provider（Flash / mock）へ渡し、固有名詞・
+    機微情報を除去したルール文案を作らせる。人が文案を確認・編集してから
+    text 付き promote で反映する（人の承認が最終ゲート）。
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await rules_repo.get_rule_by_human_id(conn, human_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"rule not found: {human_id}")
+
+    original = row["text"]
+    findings = await inspect_rule_text(original)
+    result = await get_provider().generalize_rule_text(
+        original,
+        [{"infoType": f.info_type, "quote": f.quote} for f in findings],
+    )
+    return GeneralizeResponse(original=original, generalized=result.text)
 
 
 # ---- ヘルパ -----------------------------------------------------------------------

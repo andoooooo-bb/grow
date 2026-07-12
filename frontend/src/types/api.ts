@@ -286,3 +286,17 @@ export interface KnowledgeCiCompletedEvent {
   tasksScanned: number;
   costUsd: number;
 }
+
+// ---- チーム昇格DLPガードレール（#29 §6.7。backend/app/domain/dto.py と鏡写し） ----
+
+// 機微情報の検出1件（infoType: DLP infoType 名 / quote: 該当文字列）
+export interface DlpFinding {
+  infoType: string;
+  quote: string;
+}
+
+// POST /api/rules/:id/generalize の応答（一般化文案。永続化しない）
+export interface GeneralizeResponse {
+  original: string;
+  generalized: string;
+}

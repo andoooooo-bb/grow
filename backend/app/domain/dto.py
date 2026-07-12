@@ -327,3 +327,30 @@ class KnowledgeCiCompletedEvent(CamelModel):
     rules_scanned: int
     tasks_scanned: int
     cost_usd: float
+
+
+# ---- チーム昇格DLPガードレール（#29 §6.7） ----
+
+
+class PromoteRuleRequest(CamelModel):
+    """POST /api/rules/:id/promote のオプショナル body（#29）。
+
+    text: 一般化済み文案での差し替え。指定時は文案を機微情報スキャン →
+    通過したら text を更新してから昇格する（人が確認・編集した文案の反映）。
+    """
+
+    text: str | None = None
+
+
+class DlpFindingDto(CamelModel):
+    """機微情報の検出1件（info_type: DLP infoType 名 / quote: 該当文字列）。"""
+
+    info_type: str
+    quote: str
+
+
+class GeneralizeResponse(CamelModel):
+    """POST /api/rules/:id/generalize の応答（#29。文案は永続化しない）。"""
+
+    original: str
+    generalized: str

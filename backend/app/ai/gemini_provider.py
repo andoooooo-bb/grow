@@ -33,6 +33,7 @@ from app.ai.provider import (
     CiProposal,
     DeepDiveResult,
     ExecuteResult,
+    GeneralizeResult,
     IntakeRoute,
     NextAction,
     NextActionResult,
@@ -1050,6 +1051,31 @@ class GeminiProvider(AiProvider):
             ),
         )
 
+    # ---- チーム昇格DLPガードレール（#29。並行 Wave との衝突回避のためクラス末尾） ----
+
+    async def generalize_rule_text(
+        self, text: str, findings: list[dict]
+    ) -> GeneralizeResult:
+        """一般化リライト（#29 §6.7）: Flash に固有名詞・機微情報の除去を任せる。
+
+        DLP の findings（{"infoType", "quote"}）を明示して「何を消すべきか」を
+        具体的に伝える。文案は返すだけで永続化しない — 人が確認・編集してから
+        text 付き promote で再昇格する。
+        """
+        settings = get_settings()
+        response = await self._generate(
+            model=settings.gemini_model_light,
+            contents=_user_content(
+                "上記のルール文から機微情報を取り除いた一般化ルール文案を、"
+                "文案のみ（前置き・説明・引用記号なし）で返してください。"
+            ),
+            config=types.GenerateContentConfig(
+                system_instruction=_generalize_rule_system(text, findings)
+            ),
+        )
+        generalized = _require_text(response, "generalize_rule_text").strip()
+        return GeneralizeResult(text=generalized, usage=_usage_from(response))
+
 
 # ---- 夜間ナレッジCI（#26）の FunctionDeclaration・プロンプト・パーサ ------------------
 # #27 が同ファイル上部に追記するため、本ブロックはファイル末尾に置く
@@ -1423,3 +1449,29 @@ def _parse_assessment(args: dict) -> tuple[IntakeRoute, list[str], str]:
         # 質問なしの hearing は呼び出し側（intake ジョブ）が何も投稿できない
         raise GeminiResponseError("assess_task の hearing に questions がありません")
     return route, cleaned, reason
+
+
+# ---- チーム昇格DLPガードレール（#29）のプロンプト（並行 Wave との衝突回避のため末尾） ----
+
+
+def _generalize_rule_system(text: str, findings: list[dict]) -> str:
+    """#29 一般化リライトの system プロンプト（§6.7: 固有名詞・秘密情報を焼き込まない）。"""
+    parts = [
+        "あなたは Grow のナレッジ管理エージェントです。個人ルールをチームの形式知へ",
+        "昇格する前に、ルール文から機微情報を取り除いた一般化文案を作ります。",
+        "",
+        "# 一般化の原則",
+        "- 人名・メールアドレス・電話番号などの固有情報は、役割や一般名詞",
+        "（例「田中様」→「担当者」、実アドレス→「所定の宛先」）へ置き換える。",
+        "- ルールの意図・判断軸は変えない。命令形・検証可能な粒度を保つ。",
+        "- 誰のチームでも再利用できる表現にする。新しい機微情報を加えない。",
+        "",
+        "# 対象のルール文",
+        text,
+    ]
+    if findings:
+        parts += ["", "# 検出された機微情報（必ず除去する）"]
+        parts += [
+            f"- {f.get('infoType', '不明')}: {f.get('quote', '')}" for f in findings
+        ]
+    return "\n".join(parts)
