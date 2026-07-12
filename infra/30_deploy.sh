@@ -69,11 +69,13 @@ gcloud run services update "$SERVICE_NAME" \
 echo "  SELF_URL=${SERVICE_URL}"
 
 echo ""
-echo "== ヘルスチェック"
-if curl -fsS --max-time 30 "${SERVICE_URL}/healthz" >/dev/null; then
-  echo "  OK: ${SERVICE_URL}/healthz"
+echo "== ヘルスチェック（SPA配信 + API + DB を1発で確認）"
+# /api/board は Cloud SQL 接続まで含めて疎通確認できる（本番の実質ヘルスチェック）。
+# /healthz は SPA 静的マウント配下で GFE 404 になり得るため使わない。
+if curl -fsS --max-time 30 "${SERVICE_URL}/api/board" >/dev/null; then
+  echo "  OK: ${SERVICE_URL}/api/board（DB接続込みで疎通）"
 else
-  echo "  警告: /healthz に到達できません。gcloud run services logs read ${SERVICE_NAME} --region ${REGION} で確認してください。" >&2
+  echo "  警告: /api/board に到達できません。gcloud run services logs read ${SERVICE_NAME} --region ${REGION} で確認してください。" >&2
 fi
 
 echo ""
