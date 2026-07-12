@@ -94,10 +94,6 @@ export function Drawer() {
             <AppliedRules task={task} />
             {/* (c) 学習（§3.3.2c, #14）: 完了系（you_review/reviewing/done）以外は非表示 */}
             <LearnSection task={task} />
-            {/* (c-2') ライブ実況（#24）: ai_work 中の生成途中テキスト。完了で (c-2) に差し替わる */}
-            <LiveDraftSection task={task} />
-            {/* (c-2) 成果物（§3.3.2 c-2, #10）: 学習(c)と サブタスク(d) の間に置く */}
-            <ArtifactSection task={task} canAssignAi={canAssignAi} />
             {/* (d) サブタスク（§3.3.2d, #12）: childIds が無ければコンポーネント側で非表示 */}
             <SubtaskSection task={task} />
             {/* (d-2) リレー・タイムライン（#19）: ジョブ0件時はコンポーネント側で非表示 */}
@@ -105,6 +101,11 @@ export function Drawer() {
             {/* (d-3) 意思決定トレース（#25）: 版0件時はコンポーネント側で非表示（既定は閉） */}
             <TraceSection task={task} />
             <ActivityThread taskId={task.id} />
+            {/* 会話の「最後」に成果物を置く（レビュー導線: 「レビューをお願いします」の
+                直後に本文が来て、下のコンポーザで指示できる）。ライブ実況(#24)→完了で
+                確定版(#10)に差し替わる。 */}
+            <LiveDraftSection task={task} />
+            <ArtifactSection task={task} canAssignAi={canAssignAi} />
           </div>
           {/* コンポーザは最下部にピン留め（常に入力できる, §3.3.2f） */}
           <Composer taskId={task.id} />
