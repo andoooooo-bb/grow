@@ -4,6 +4,7 @@
 //   event: <type>
 //   data: {"type": <type>, "payload": <DTO の camelCase>}
 
+import { getBoard } from './api.ts';
 import { useBoardStore } from '../store/board.ts';
 import type {
   ArtifactDeltaEvent,
@@ -103,4 +104,52 @@ export function connectEvents(): () => void {
   });
 
   return () => source.close();
+}
+
+/**
+ * ポーリング・フォールバック（#本番SSE対策）。
+ *
+ * Cloud Run はストリーミング応答（SSE）をバッファする挙動があり、本番では
+ * EventSource がイベントを受け取れないことがある（AIジョブの進捗・成果物・
+ * レビュー往復が画面に反映されない）。SSE が届かない環境でも UI が確実に
+ * 更新されるよう、一定間隔でサーバの真実を取り直す保険を並走させる。
+ *
+ * - board（cards/lanes/rules）を再取得 → setBoard（UI状態は保持。楽観更新は
+ *   サーバ値へ収束する）。AIジョブによる status/レーン/進捗の変化が反映される。
+ * - ドロワーを開いていれば、そのカードの comments / artifacts も取り直す
+ *   （着手・レビュー・完了コメントや成果物の新版がドロワーに出る）。
+ * SSE と併走しても適用は冪等なので二重反映の害はない。タブ非表示中は休む。
+ */
+export function startPolling(intervalMs = 2500): () => void {
+  let stopped = false;
+  let inFlight = false;
+
+  const tick = async () => {
+    if (stopped || inFlight) return;
+    if (typeof document !== 'undefined' && document.hidden) return;
+    inFlight = true;
+    try {
+      const board = await getBoard();
+      if (stopped) return;
+      const store = useBoardStore.getState();
+      store.setBoard(board);
+      const { selectedId } = store;
+      if (selectedId && board.cards[selectedId]) {
+        await Promise.all([
+          store.loadComments(selectedId),
+          store.loadArtifacts(selectedId),
+        ]);
+      }
+    } catch {
+      // 一時的な取得失敗は無視して次の tick に任せる（トーストは出さない）
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  const id = setInterval(() => void tick(), intervalMs);
+  return () => {
+    stopped = true;
+    clearInterval(id);
+  };
 }
