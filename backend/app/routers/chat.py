@@ -49,6 +49,7 @@ from app.events import (
     TASK_UPDATED,
     publish_event,
 )
+from app.guard import guard_ai_action
 from app.repo import chat as chat_repo
 from app.repo import comments as comments_repo
 from app.repo import rules as rules_repo
@@ -158,27 +159,30 @@ async def start_chat(human_id: str) -> list[ChatMessage]:
     pool = await get_pool()
     created: ChatMessage | None = None
     updated: Task | None = None
-    async with pool.acquire() as conn, conn.transaction():
-        row = await tasks_repo.get_task_row(conn, human_id, for_update=True)
-        if row is None:
-            raise HTTPException(status_code=404, detail=f"task not found: {human_id}")
-        messages = await chat_repo.list_chat_messages(conn, row)
-        if not messages:
-            rule_rows = await rules_repo.relevant_rules(conn, row)
-            reply = await get_provider().chat_reply(
-                _task_prompt_dict(row),
-                [],
-                [rules_repo.rule_prompt_dict(r) for r in rule_rows],
-            )
-            created = await chat_repo.create_chat_message(
-                conn, row, author=Author.AI, text=reply.text
-            )
-            messages = [created]
-            current = TaskStatus(row["status"])
-            if current is not TaskStatus.SPEC and can_transition(current, TaskStatus.SPEC):
-                updated = await tasks_repo.apply_patch(
-                    conn, row, {"status": TaskStatus.SPEC}, actor="human"
+    async with pool.acquire() as conn:
+        # #security: 初回は初期質問生成（chat_reply）で AI を起動するためガードする
+        await guard_ai_action(conn)
+        async with conn.transaction():
+            row = await tasks_repo.get_task_row(conn, human_id, for_update=True)
+            if row is None:
+                raise HTTPException(status_code=404, detail=f"task not found: {human_id}")
+            messages = await chat_repo.list_chat_messages(conn, row)
+            if not messages:
+                rule_rows = await rules_repo.relevant_rules(conn, row)
+                reply = await get_provider().chat_reply(
+                    _task_prompt_dict(row),
+                    [],
+                    [rules_repo.rule_prompt_dict(r) for r in rule_rows],
                 )
+                created = await chat_repo.create_chat_message(
+                    conn, row, author=Author.AI, text=reply.text
+                )
+                messages = [created]
+                current = TaskStatus(row["status"])
+                if current is not TaskStatus.SPEC and can_transition(current, TaskStatus.SPEC):
+                    updated = await tasks_repo.apply_patch(
+                        conn, row, {"status": TaskStatus.SPEC}, actor="human"
+                    )
     if created is not None:
         publish_event(CHAT_MESSAGE_CREATED, created.model_dump(mode="json", by_alias=True))
     if updated is not None:
@@ -191,6 +195,8 @@ async def send_chat(human_id: str, payload: ChatSendRequest) -> ChatMessage:
     """人メッセージ送信（§5.3 sendChat step1）。保存して即返し、応答は背景ジョブへ。"""
     pool = await get_pool()
     async with pool.acquire() as conn:
+        # #security: 背景の深掘りエージェント（deep_dive）が走るためガードする
+        await guard_ai_action(conn)
         row = await tasks_repo.get_task_row(conn, human_id)
         if row is None:
             raise HTTPException(status_code=404, detail=f"task not found: {human_id}")

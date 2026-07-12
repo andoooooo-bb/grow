@@ -24,6 +24,7 @@ from app.domain.dto import (
 )
 from app.domain.models import Rule
 from app.events import RULE_CREATED, RULE_UPDATED, publish_event
+from app.guard import guard_ai_action
 from app.jobs.knowledge_ci import run_knowledge_ci
 from app.repo import knowledge as knowledge_repo
 from app.repo import tasks as tasks_repo
@@ -39,6 +40,10 @@ _ARCHIVING_KINDS = frozenset({"merge", "conflict", "demote"})
 @router.post("/knowledge/ci/run")
 async def run_ci_manually() -> KnowledgeCiRunResponse:
     """デモ用の手動実行（認証なし公開API）。夜間バッチと同じ処理を即時実行する。"""
+    # #security: 無認証の公開APIで reconcile（Gemini）が走るためガードする
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await guard_ai_action(conn)
     outcome = await run_knowledge_ci(trigger="manual")
     return KnowledgeCiRunResponse(
         run_id=outcome.run_id, proposals_created=outcome.proposals_created

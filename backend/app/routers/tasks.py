@@ -19,6 +19,7 @@ from app.domain.dto import TaskCreate, TaskPatch
 from app.domain.models import AiJobKind, Task, TaskStatus
 from app.domain.state_machine import can_transition, validate_progress_invariant
 from app.events import TASK_UPDATED, publish_event
+from app.guard import guard_ai_action
 from app.jobs import queue as jobs_queue
 from app.repo import ai_jobs as ai_jobs_repo
 from app.repo import tasks as tasks_repo
@@ -30,17 +31,20 @@ router = APIRouter(tags=["tasks"])
 async def create_task(payload: TaskCreate) -> Task:
     pool = await get_pool()
     intake_job_id: str | None = None
-    async with pool.acquire() as conn, conn.transaction():
-        try:
-            task = await tasks_repo.create_task(conn, payload)
-        except tasks_repo.InvalidParentError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        if payload.parent_id is None:
-            # #27 受付エージェント: 直接作成されたカードのみ判定する
-            # （親から生成されるサブタスクには走らせない）
-            row = await tasks_repo.get_task_row(conn, task.id)
-            job_row = await ai_jobs_repo.create_job(conn, row, kind=AiJobKind.INTAKE)
-            intake_job_id = str(job_row["id"])
+    async with pool.acquire() as conn:
+        # #security: 直接作成カードは受付エージェント（intake, Gemini）が走るためガードする
+        await guard_ai_action(conn)
+        async with conn.transaction():
+            try:
+                task = await tasks_repo.create_task(conn, payload)
+            except tasks_repo.InvalidParentError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            if payload.parent_id is None:
+                # #27 受付エージェント: 直接作成されたカードのみ判定する
+                # （親から生成されるサブタスクには走らせない）
+                row = await tasks_repo.get_task_row(conn, task.id)
+                job_row = await ai_jobs_repo.create_job(conn, row, kind=AiJobKind.INTAKE)
+                intake_job_id = str(job_row["id"])
     publish_event(TASK_UPDATED, task.model_dump(mode="json", by_alias=True))
     if intake_job_id is not None:
         # enqueue はコミット後（ジョブ側が別コネクションで行を読むため §7.2）
