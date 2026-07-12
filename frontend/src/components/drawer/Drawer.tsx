@@ -10,12 +10,10 @@ import { ActionBar } from './ActionBar';
 import { ActivityThread } from './ActivityThread';
 import { AgentTimeline } from './AgentTimeline';
 import { AppliedRules } from './AppliedRules';
-import { ArtifactSection } from './ArtifactSection';
 import { ChatMode } from './ChatMode';
 import { Composer } from './Composer';
 import { DrawerHeader } from './DrawerHeader';
 import { LearnSection } from './LearnSection';
-import { LiveDraftSection } from './LiveDraftSection';
 import { SubtaskSection } from './SubtaskSection';
 import { TraceSection } from './TraceSection';
 import './Drawer.css';
@@ -100,12 +98,9 @@ export function Drawer() {
             <AgentTimeline task={task} />
             {/* (d-3) 意思決定トレース（#25）: 版0件時はコンポーネント側で非表示（既定は閉） */}
             <TraceSection task={task} />
-            <ActivityThread taskId={task.id} />
-            {/* 会話の「最後」に成果物を置く（レビュー導線: 「レビューをお願いします」の
-                直後に本文が来て、下のコンポーザで指示できる）。ライブ実況(#24)→完了で
-                確定版(#10)に差し替わる。 */}
-            <LiveDraftSection task={task} />
-            <ArtifactSection task={task} canAssignAi={canAssignAi} />
+            {/* アクティビティ＝会話。成果物の各版もこの中にメッセージとして時系列で
+                差し込まれ、最新版（レビュー対象）が会話の最後に出る（#10/#20/#24 統合） */}
+            <ActivityThread task={task} canAssignAi={canAssignAi} />
           </div>
           {/* コンポーザは最下部にピン留め（常に入力できる, §3.3.2f） */}
           <Composer taskId={task.id} />

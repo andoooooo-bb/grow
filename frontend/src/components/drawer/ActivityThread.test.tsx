@@ -5,13 +5,19 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createInitialBoardState, useBoardStore } from '../../store/board.ts';
 import { boardFixture } from '../../test/boardFixture.ts';
-import type { Comment } from '../../types/domain.ts';
+import type { Comment, Task } from '../../types/domain.ts';
 import { ActivityThread } from './ActivityThread';
 
 const AT = '2026-07-07T00:00:00Z';
 
 function makeComment(partial: Partial<Comment> & Pick<Comment, 'id' | 'text'>): Comment {
   return { taskId: 'T-098', author: 'ai', createdAt: AT, ...partial };
+}
+
+function task(): Task {
+  const t = useBoardStore.getState().cards['T-098'];
+  if (!t) throw new Error('fixture task T-098 not found');
+  return t;
 }
 
 beforeEach(() => {
@@ -32,7 +38,7 @@ describe('ActivityThread: 役割バッジ（#19）', () => {
         ],
       },
     });
-    render(<ActivityThread taskId="T-098" />);
+    render(<ActivityThread task={task()} canAssignAi={false} />);
 
     expect(screen.getAllByText('Grow')).toHaveLength(4);
     expect(screen.getByText('実行AI')).toHaveClass('agent-badge--executor');
@@ -45,7 +51,7 @@ describe('ActivityThread: 役割バッジ（#19）', () => {
     useBoardStore.setState({
       comments: { 'T-098': [makeComment({ id: 'c-1', text: '旧コメント' })] },
     });
-    render(<ActivityThread taskId="T-098" />);
+    render(<ActivityThread task={task()} canAssignAi={false} />);
     expect(screen.getByText('Grow')).toBeInTheDocument();
     expect(document.querySelector('.agent-badge')).toBeNull();
   });
@@ -58,7 +64,7 @@ describe('ActivityThread: 役割バッジ（#19）', () => {
         ],
       },
     });
-    render(<ActivityThread taskId="T-098" />);
+    render(<ActivityThread task={task()} canAssignAi={false} />);
     expect(screen.getByText('あなた')).toBeInTheDocument();
     expect(document.querySelector('.agent-badge')).toBeNull();
   });
