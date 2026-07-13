@@ -1,12 +1,13 @@
 """コメント API（POST/GET /api/tasks/{human_id}/comments）。"""
 
 import asyncpg
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from app.db import get_pool
 from app.domain.dto import CommentCreate
 from app.domain.models import Comment
 from app.events import COMMENT_CREATED, TASK_UPDATED, publish_event
+from app.guard import assert_write_rate
 from app.repo import comments as comments_repo
 from app.repo import tasks as tasks_repo
 
@@ -14,7 +15,10 @@ router = APIRouter(tags=["comments"])
 
 
 @router.post("/tasks/{human_id}/comments", status_code=201)
-async def create_comment(human_id: str, payload: CommentCreate) -> Comment:
+async def create_comment(
+    human_id: str, payload: CommentCreate, request: Request
+) -> Comment:
+    assert_write_rate(request)  # #security: IP単位の書き込みレート制限
     pool = await get_pool()
     async with pool.acquire() as conn, conn.transaction():
         task_row = await tasks_repo.get_task_row(conn, human_id)

@@ -71,7 +71,15 @@ class Settings(BaseSettings):
 
     # ガードの有効/無効スイッチ（AI_GUARD_ENABLED）。テスト/ローカルは false で素通しできる。
     # AI_PROVIDER=mock でも自動では緩めない（このフラグでのみ制御する）。
+    # 書き込みレート制限（assert_write_rate）もこのフラグで一緒に有効/無効を制御する。
     ai_guard_enabled: bool = True
+
+    # 書き込み系エンドポイント（POST/PATCH）の IP 単位スライディングウィンドウ・レート上限。
+    # 既定は 60 秒（write_rate_window_sec）あたり 1 IP から 60 回（write_rate_max）まで。
+    # WRITE_RATE_MAX / WRITE_RATE_WINDOW_SEC で上書き。ai_guard_enabled=True のときのみ効く。
+    # max-instances=1 前提のプロセス内状態（AI レートと同じ前提, #24）。
+    write_rate_max: int = 60
+    write_rate_window_sec: int = 60
 
 
 @lru_cache

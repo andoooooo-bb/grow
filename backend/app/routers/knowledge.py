@@ -13,7 +13,7 @@ adopt の kind 別処理（単一トランザクション。§6.4b/c・§6.6）:
 全 kind で rule_feedback に採否を記録する（task_id は null 可 — CI 由来のお手本ログ §6.4a）。
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from app.db import get_pool
 from app.domain.dto import (
@@ -24,7 +24,7 @@ from app.domain.dto import (
 )
 from app.domain.models import Rule
 from app.events import RULE_CREATED, RULE_UPDATED, publish_event
-from app.guard import guard_ai_action
+from app.guard import assert_write_rate, guard_ai_action
 from app.jobs.knowledge_ci import run_knowledge_ci
 from app.repo import knowledge as knowledge_repo
 from app.repo import tasks as tasks_repo
@@ -38,8 +38,9 @@ _ARCHIVING_KINDS = frozenset({"merge", "conflict", "demote"})
 
 
 @router.post("/knowledge/ci/run")
-async def run_ci_manually() -> KnowledgeCiRunResponse:
+async def run_ci_manually(request: Request) -> KnowledgeCiRunResponse:
     """デモ用の手動実行（認証なし公開API）。夜間バッチと同じ処理を即時実行する。"""
+    assert_write_rate(request)  # #security: IP単位の書き込みレート制限（AIガードの前段）
     # #security: 無認証の公開APIで reconcile（Gemini）が走るためガードする
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -64,8 +65,9 @@ async def list_proposals() -> KnowledgeProposalsResponse:
 
 
 @router.post("/knowledge/proposals/{proposal_id}/adopt")
-async def adopt_proposal(proposal_id: str) -> KnowledgeAdoptResponse:
+async def adopt_proposal(proposal_id: str, request: Request) -> KnowledgeAdoptResponse:
     """提案を採用する（kind 別処理はモジュール docstring 参照）。"""
+    assert_write_rate(request)  # #security: IP単位の書き込みレート制限
     pool = await get_pool()
     async with pool.acquire() as conn, conn.transaction():
         row = await _get_pending_row(conn, proposal_id)
@@ -96,8 +98,11 @@ async def adopt_proposal(proposal_id: str) -> KnowledgeAdoptResponse:
 
 
 @router.post("/knowledge/proposals/{proposal_id}/dismiss")
-async def dismiss_proposal(proposal_id: str) -> KnowledgeProposalDto:
+async def dismiss_proposal(
+    proposal_id: str, request: Request
+) -> KnowledgeProposalDto:
     """提案を却下する（ルールは変更せず feedback 記録のみ §6.4a）。"""
+    assert_write_rate(request)  # #security: IP単位の書き込みレート制限
     pool = await get_pool()
     async with pool.acquire() as conn, conn.transaction():
         row = await _get_pending_row(conn, proposal_id)

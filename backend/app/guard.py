@@ -22,17 +22,22 @@ import time
 from collections import deque
 
 import asyncpg
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from app.config import get_settings
 
 # 429 の日本語 detail（FE の fetch 失敗 → boardError にそのまま乗る）
 RATE_LIMIT_DETAIL = "アクセスが集中しています。しばらくして再度お試しください。"
 BUDGET_LIMIT_DETAIL = "本日のAI利用上限に達しました。明日また利用できます。"
+WRITE_RATE_LIMIT_DETAIL = "書き込みが多すぎます。しばらくして再度お試しください。"
 
 # AI 起動時刻（monotonic 秒）のスライディングウィンドウ。プロセス内で共有する
 # （max-instances=1 なのでインスタンス間分散は不要）。
 _rate_events: deque[float] = deque()
+
+# 書き込み時刻（monotonic 秒）の IP 単位スライディングウィンドウ。IP ごとに deque を持つ
+# （max-instances=1 前提のプロセス内状態）。空になった IP のキーは掃除して肥大を防ぐ。
+_write_events: dict[str, deque[float]] = {}
 
 
 def _now() -> float:
@@ -43,6 +48,50 @@ def _now() -> float:
 def reset_rate_state() -> None:
     """スライディングウィンドウを空にする（テスト間で状態を持ち越さないためのフック）。"""
     _rate_events.clear()
+
+
+def reset_write_rate_state() -> None:
+    """IP 単位の書き込みウィンドウを空にする（テスト間で状態を持ち越さないためのフック）。"""
+    _write_events.clear()
+
+
+def _client_ip(request: Request) -> str:
+    """クライアント IP を取得する。Cloud Run 等のプロキシ経由では X-Forwarded-For の
+    先頭（最も外側のクライアント）を採用し、無ければ直接接続元にフォールバックする。"""
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def assert_write_rate(request: Request) -> None:
+    """書き込み系エンドポイントの IP 単位レート制限（プロセス内スライディングウィンドウ）。
+
+    呼ばれるたびに当該 IP の現在時刻（monotonic）を記録する。window 内の書き込み回数が
+    write_rate_max 以上なら HTTPException(429) を送出する。ai_guard_enabled=False なら
+    何もしない。掃除: 呼び出しごとに全 IP の window 外エントリを捨て、空になったキーは
+    dict から削除する（アクセスが途絶えた IP を残さず、dict を「window 内に活動のある
+    IP」だけに抑える）。max-instances=1 前提のプロセス内状態（#24）。
+    """
+    settings = get_settings()
+    if not settings.ai_guard_enabled:
+        return
+    now = _now()
+    window = settings.write_rate_window_sec
+    ip = _client_ip(request)
+
+    # 全 IP の古いエントリを掃除し、空になったキーを削除する（メモリ肥大の防止）。
+    for known_ip in list(_write_events.keys()):
+        events = _write_events[known_ip]
+        while events and now - events[0] >= window:
+            events.popleft()
+        if not events:
+            del _write_events[known_ip]
+
+    events = _write_events.setdefault(ip, deque())
+    if len(events) >= settings.write_rate_max:
+        raise HTTPException(status_code=429, detail=WRITE_RATE_LIMIT_DETAIL)
+    events.append(now)
 
 
 def assert_ai_rate() -> None:

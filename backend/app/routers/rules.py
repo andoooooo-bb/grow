@@ -20,7 +20,7 @@ from typing import Any
 from uuid import uuid4
 
 import asyncpg
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
 from app.ai import get_provider
@@ -41,7 +41,7 @@ from app.events import (
     TASK_UPDATED,
     publish_event,
 )
-from app.guard import guard_ai_action
+from app.guard import assert_write_rate, guard_ai_action
 from app.repo import chat as chat_repo
 from app.repo import comments as comments_repo
 from app.repo import rules as rules_repo
@@ -111,12 +111,15 @@ async def learn_proposals(human_id: str) -> list[RuleProposalDto]:
 
 
 @router.post("/tasks/{human_id}/learn/adopt", status_code=201)
-async def adopt_learn(human_id: str, payload: LearnDecisionRequest) -> Rule:
+async def adopt_learn(
+    human_id: str, payload: LearnDecisionRequest, request: Request
+) -> Rule:
     """候補を採用する（§1.7 step4 / §5.3 adoptLearn / §6.8 基準①）。
 
     単一トランザクションで: rules 追加（K-{seq}, applied 0, source=「{taskId} から学習」）
     → rule_feedback に adopt を記録 → カードへAIコメント。コミット後に SSE 配信。
     """
+    assert_write_rate(request)  # #security: IP単位の書き込みレート制限
     pool = await get_pool()
     async with pool.acquire() as conn, conn.transaction():
         row = await tasks_repo.get_task_row(conn, human_id, for_update=True)
@@ -157,8 +160,11 @@ async def adopt_learn(human_id: str, payload: LearnDecisionRequest) -> Rule:
 
 
 @router.post("/tasks/{human_id}/learn/dismiss", status_code=204)
-async def dismiss_learn(human_id: str, payload: LearnDecisionRequest) -> Response:
+async def dismiss_learn(
+    human_id: str, payload: LearnDecisionRequest, request: Request
+) -> Response:
     """候補を却下する（§5.3 dismissLearn）。ルールは作らず feedback のみ記録する。"""
+    assert_write_rate(request)  # #security: IP単位の書き込みレート制限
     pool = await get_pool()
     async with pool.acquire() as conn, conn.transaction():
         row = await tasks_repo.get_task_row(conn, human_id)
@@ -199,7 +205,7 @@ def _promote_blocked_response(findings: list[Finding]) -> JSONResponse:
 # response_model を導出させない（Union[Rule, JSONResponse] は Pydantic field 不可）
 @router.post("/rules/{human_id}/promote", response_model=Rule)
 async def promote_rule(
-    human_id: str, payload: PromoteRuleRequest | None = None
+    human_id: str, request: Request, payload: PromoteRuleRequest | None = None
 ) -> Rule | JSONResponse:
     """個人ルールをチームへ昇格する（scope=team）。既に team なら何もせず 200（冪等）。
 
@@ -208,6 +214,7 @@ async def promote_rule(
     （text も更新しない）。text 指定かつスキャン通過なら text を更新してから
     昇格する（AI一般化文案を人が確認・編集した結果の反映）。
     """
+    assert_write_rate(request)  # #security: IP単位の書き込みレート制限
     new_text = payload.text if payload is not None and payload.text else None
 
     pool = await get_pool()

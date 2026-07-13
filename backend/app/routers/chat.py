@@ -18,7 +18,7 @@ import logging
 from typing import Any
 
 import asyncpg
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from app.ai import get_provider
 from app.db import get_pool
@@ -49,7 +49,7 @@ from app.events import (
     TASK_UPDATED,
     publish_event,
 )
-from app.guard import guard_ai_action
+from app.guard import assert_write_rate, guard_ai_action
 from app.repo import chat as chat_repo
 from app.repo import comments as comments_repo
 from app.repo import rules as rules_repo
@@ -150,12 +150,13 @@ async def get_chat_messages(human_id: str) -> list[ChatMessage]:
 
 
 @router.post("/tasks/{human_id}/chat/start")
-async def start_chat(human_id: str) -> list[ChatMessage]:
+async def start_chat(human_id: str, request: Request) -> list[ChatMessage]:
     """壁打ち開始（§5.3 startChat）。冪等 — chat が空のときだけ AI 初期質問を投入する。
 
     初回は retrieval ルールを渡した chat_reply（§7.4a）で初期質問を生成し、
     spec へ遷移可能なら status=spec（レーンは変えない §5.2）。2回目以降は一覧を返すだけ。
     """
+    assert_write_rate(request)  # #security: IP単位の書き込みレート制限（AIガードの前段）
     pool = await get_pool()
     created: ChatMessage | None = None
     updated: Task | None = None
@@ -191,8 +192,11 @@ async def start_chat(human_id: str) -> list[ChatMessage]:
 
 
 @router.post("/tasks/{human_id}/chat", status_code=201)
-async def send_chat(human_id: str, payload: ChatSendRequest) -> ChatMessage:
+async def send_chat(
+    human_id: str, payload: ChatSendRequest, request: Request
+) -> ChatMessage:
     """人メッセージ送信（§5.3 sendChat step1）。保存して即返し、応答は背景ジョブへ。"""
+    assert_write_rate(request)  # #security: IP単位の書き込みレート制限（AIガードの前段）
     pool = await get_pool()
     async with pool.acquire() as conn:
         # #security: 背景の深掘りエージェント（deep_dive）が走るためガードする
