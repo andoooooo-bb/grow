@@ -4,12 +4,13 @@
 - POST: 人の編集を新版として保存し、artifact.created を publish する。
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from app.db import get_pool
 from app.domain.dto import ArtifactCreate, ArtifactResponse
 from app.domain.models import Artifact
 from app.events import ARTIFACT_CREATED, publish_event
+from app.guard import assert_write_rate
 from app.repo import tasks as tasks_repo
 from app.repo.artifacts import create_artifact, list_artifacts
 
@@ -28,7 +29,10 @@ async def get_artifacts(human_id: str) -> ArtifactResponse:
 
 
 @router.post("/tasks/{human_id}/artifacts", status_code=201)
-async def post_artifact(human_id: str, payload: ArtifactCreate) -> Artifact:
+async def post_artifact(
+    human_id: str, payload: ArtifactCreate, request: Request
+) -> Artifact:
+    assert_write_rate(request)  # #security: IP単位の書き込みレート制限
     pool = await get_pool()
     async with pool.acquire() as conn, conn.transaction():
         task_row = await tasks_repo.get_task_row(conn, human_id, for_update=True)

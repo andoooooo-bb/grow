@@ -56,6 +56,20 @@ def _reset_ai_guard_rate():
     yield
 
 
+@pytest.fixture(autouse=True)
+def _reset_write_rate():
+    """各テストの前に書き込みレート（IP 単位のプロセス内 dict）を空にする。
+
+    _write_events はモジュールグローバルで全テストを跨いで累積するため、リセットしないと
+    スイート全体（同一の ASGI クライアント IP からの多数の書き込み）で write_rate_max に
+    達し 429 が出て既存テストが落ちる（AI レートリセットと同じ理由 #security）。
+    """
+    from app.guard import reset_write_rate_state
+
+    reset_write_rate_state()
+    yield
+
+
 @pytest.fixture(scope="session")
 def test_db_url() -> str:
     """セッションで一度だけ grow_test を再作成する（接続不可なら skip）。"""

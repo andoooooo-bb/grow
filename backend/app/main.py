@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.routers import api_router
+from app.routers.internal_demo import router as internal_demo_router
 from app.routers.internal_jobs import router as internal_jobs_router
 from app.routers.internal_knowledge import router as internal_knowledge_router
 
@@ -36,6 +37,9 @@ app.include_router(internal_jobs_router)
 
 # 夜間ナレッジCI（Cloud Scheduler の push ターゲット, #26）。/api prefix の外。
 app.include_router(internal_knowledge_router)
+
+# デモDB自動リセット（Cloud Scheduler の push ターゲット, #security）。/api prefix の外。
+app.include_router(internal_demo_router)
 
 
 def _mount_spa(application: FastAPI, dist_dir: Path) -> None:

@@ -12,14 +12,14 @@
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from app.db import get_pool
 from app.domain.dto import TaskCreate, TaskPatch
 from app.domain.models import AiJobKind, Task, TaskStatus
 from app.domain.state_machine import can_transition, validate_progress_invariant
 from app.events import TASK_UPDATED, publish_event
-from app.guard import guard_ai_action
+from app.guard import assert_write_rate, guard_ai_action
 from app.jobs import queue as jobs_queue
 from app.repo import ai_jobs as ai_jobs_repo
 from app.repo import tasks as tasks_repo
@@ -28,7 +28,8 @@ router = APIRouter(tags=["tasks"])
 
 
 @router.post("/tasks", status_code=201)
-async def create_task(payload: TaskCreate) -> Task:
+async def create_task(payload: TaskCreate, request: Request) -> Task:
+    assert_write_rate(request)  # #security: IP単位の書き込みレート制限（AIガードの前段）
     pool = await get_pool()
     intake_job_id: str | None = None
     async with pool.acquire() as conn:
@@ -53,7 +54,8 @@ async def create_task(payload: TaskCreate) -> Task:
 
 
 @router.patch("/tasks/{human_id}")
-async def patch_task(human_id: str, payload: TaskPatch) -> Task:
+async def patch_task(human_id: str, payload: TaskPatch, request: Request) -> Task:
+    assert_write_rate(request)  # #security: IP単位の書き込みレート制限
     # exclude_unset 相当: 明示的に送られたフィールドだけを扱う
     # （progress は "null で明示クリア" と "未指定" を区別する必要がある）
     fields: dict[str, Any] = {name: getattr(payload, name) for name in payload.model_fields_set}
